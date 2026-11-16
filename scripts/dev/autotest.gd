@@ -92,7 +92,7 @@ func _first_scenery() -> int:
 
 
 func _release_all() -> void:
-	for action: String in ["move_right", "move_left", "jump", "stay", "fetch", "feed", "throw", "call_dog", "pet_dog"]:
+	for action: String in ["move_right", "move_left", "jump", "stay", "fetch", "feed", "throw", "call_dog"]:
 		_release(action)
 	_jump_hold = 0.0
 

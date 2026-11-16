@@ -2,7 +2,17 @@ extends Node2D
 ## Loads the levels, wires player, dog and camera together, turns key presses
 ## into dog commands, and draws the on-screen status.
 
-const HELP := "Move  A/D     Jump  Space     Dog:  stay  S    fetch  G    call  E    pet  F    biscuit  T    sandwich  hold H\nRestart  R     Rooms  [ ]     Debug  Tab"
+## What the key hints show for each command a room can introduce: the key
+## caps to draw, and a one-word caption.
+const KEY_HINTS := {
+	"move": [["<", ">"], "move"],
+	"jump": [["Z"], "jump"],
+	"stay": [["X"], "stay"],
+	"call_dog": [["C"], "come"],
+	"fetch": [["A"], "fetch"],
+	"throw": [["S"], "hold to aim, let go to throw"],
+	"feed": [["D"], "biscuit"],
+}
 const THROW_SPEED := Vector2(300.0, -300.0)
 
 @onready var view: SubViewportContainer = $View
@@ -18,7 +28,6 @@ var level_index := 0
 var completed := 0
 
 var _title: Label
-var _help: Label
 var _debug: Label
 var _status: Label
 var _pips: Pips
@@ -27,6 +36,9 @@ var _hearts: Hearts
 var _prompt: Label
 var _vignette: TextureRect
 var _aim: Aim
+var _keys: KeyHints
+## Rooms whose key hints have already been shown this session.
+var _keys_seen := {}
 var _show_debug := false
 var _switching := false
 var _dawdle := 0.0
@@ -62,6 +74,8 @@ func _ready() -> void:
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--level="):
 			_load_level(int(arg.get_slice("=", 1)))
+		if arg.begins_with("--shot="):
+			_save_shot(arg.get_slice("=", 1))
 		if arg.begins_with("--autotest"):
 			var bot: Node = load("res://scripts/dev/autotest.gd").new()
 			bot.set("main", self)
@@ -81,15 +95,19 @@ func _physics_process(delta: float) -> void:
 		dog.toggle_stay()
 	if Input.is_action_just_pressed("fetch"):
 		dog.fetch()
-	var near_dog := player.global_position.distance_to(dog.global_position) < 80.0
-	if Input.is_action_just_pressed("feed") and player.biscuits > 0 and near_dog:
-		player.biscuits -= 1
-		player.petting = 1.2
-		player.facing = 1 if dog.global_position.x >= player.global_position.x else -1
-		dog.feed()
-	if Input.is_action_just_pressed("pet_dog") and player.is_on_floor() and dog.pet():
-		player.petting = 1.8
-		player.facing = 1 if dog.global_position.x >= player.global_position.x else -1
+	# One key for kindness: a biscuit if there is one to give, otherwise a pat.
+	if Input.is_action_just_pressed("feed") and player.global_position.distance_to(dog.global_position) < 80.0:
+		var gave := false
+		if player.biscuits > 0:
+			player.biscuits -= 1
+			player.petting = 1.2
+			dog.feed()
+			gave = true
+		elif player.is_on_floor() and dog.pet():
+			player.petting = 1.8
+			gave = true
+		if gave:
+			player.facing = 1 if dog.global_position.x >= player.global_position.x else -1
 	_update_throw()
 
 	if Input.is_action_just_pressed("restart"):
@@ -125,6 +143,14 @@ func _physics_process(delta: float) -> void:
 		_debug.text = "dog: %s   mood: %s   pips: %d   staying: %s   jumps queued: %d\nplayer at %s   on floor: %s" % [
 			Dog.Act.keys()[dog.act], Dog.Mood.keys()[dog.mood], dog.pips, dog.staying,
 			dog.link_count(), player.global_position.round(), player.is_on_floor()]
+
+
+## Development aid: save one screenshot shortly after start, then quit.
+func _save_shot(path: String) -> void:
+	await get_tree().create_timer(1.5).timeout
+	await RenderingServer.frame_post_draw
+	get_viewport().get_texture().get_image().save_png(path)
+	get_tree().quit()
 
 
 ## Hold the throw key to see where a sandwich will land; let go to throw it.
@@ -252,12 +278,21 @@ func _load_level(index: int) -> void:
 	var ink := Color(0.94, 0.95, 1.0) if dark else Color(0.17, 0.15, 0.13)
 	_vignette.visible = level.theme == "gloam"
 	_title.add_theme_color_override("font_color", Color(ink, 0.9))
-	_help.add_theme_color_override("font_color", Color(ink, 0.6))
 	_status.add_theme_color_override("font_color", Color(ink, 0.9))
 	_debug.add_theme_color_override("font_color", Color(ink, 0.85))
 	_hearts.visible = not level.puzzle
 	_status_row.visible = level.puzzle
 	_title.text = "%d / %d   %s" % [level_index + 1, LevelMaps.LEVELS.size(), level.title]
+
+	# Key hints appear only the first time a room that introduces a command
+	# is entered; restarting it does not bring them back.
+	var hints: Array = []
+	if not _keys_seen.has(level.title):
+		for key: String in level.keys:
+			if KEY_HINTS.has(key):
+				hints.append(KEY_HINTS[key])
+		_keys_seen[level.title] = true
+	_keys.show_hints(hints)
 
 
 func _on_goal_reached() -> void:
@@ -302,10 +337,13 @@ func _build_hud() -> void:
 	_pips = Pips.new()
 	_pips.custom_minimum_size = Vector2(100.0, 18.0)
 	_status_row.add_child(_pips)
-	_help = _hud_label(box, 13, 0.55)
-	_help.text = HELP
 	_debug = _hud_label(box, 13, 0.8)
 	_debug.visible = false
+
+	_keys = KeyHints.new()
+	_keys.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_keys.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(_keys)
 
 	_prompt = Label.new()
 	_prompt.add_theme_font_size_override("font_size", 24)
@@ -382,3 +420,61 @@ class Aim extends Node2D:
 		var landing := points[points.size() - 1]
 		draw_arc(landing, 7.0, 0.0, TAU, 20, Color(1.0, 0.95, 0.75, 0.9), 1.6, true)
 		draw_circle(landing, 2.2, Color(1.0, 0.95, 0.75, 0.9), true, -1.0, true)
+
+
+## Key caps with a one-word caption each, shown for a few seconds along the
+## bottom of the screen and then faded out.
+class KeyHints extends Control:
+	const SECONDS := 9.0
+	const CAP := 34.0
+	var _hints: Array = []
+	var _left := 0.0
+
+	func show_hints(hints: Array) -> void:
+		_hints = hints
+		_left = SECONDS if not hints.is_empty() else 0.0
+		queue_redraw()
+
+	func _process(delta: float) -> void:
+		if _left > 0.0:
+			_left -= delta
+			queue_redraw()
+
+	func _draw() -> void:
+		if _left <= 0.0 or _hints.is_empty():
+			return
+		var fade := clampf(minf(_left, SECONDS - _left) / 0.6, 0.0, 1.0)
+		var font := ThemeDB.fallback_font
+		# Measure the row first so it can be centred.
+		var widths: Array[float] = []
+		var total := 0.0
+		for hint: Array in _hints:
+			var caps: Array = hint[0]
+			var w := caps.size() * (CAP + 6.0) + 8.0 + font.get_string_size(hint[1], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 17).x
+			widths.append(w)
+			total += w + 34.0
+		var x := (size.x - total + 34.0) * 0.5
+		var y := size.y - 86.0
+		for i in _hints.size():
+			var caps: Array = _hints[i][0]
+			for cap: String in caps:
+				_cap(Vector2(x, y), cap, fade, font)
+				x += CAP + 6.0
+			x += 8.0
+			draw_string_outline(font, Vector2(x, y + 24.0), _hints[i][1], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 17, 6, Color(0.06, 0.07, 0.1, 0.8 * fade))
+			draw_string(font, Vector2(x, y + 24.0), _hints[i][1], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 17, Color(1.0, 0.98, 0.92, fade))
+			x += widths[i] - caps.size() * (CAP + 6.0) - 8.0 + 34.0
+
+	func _cap(at: Vector2, text: String, fade: float, font: Font) -> void:
+		draw_rect(Rect2(at + Vector2(0.0, 3.0), Vector2(CAP, CAP)), Color(0.05, 0.06, 0.09, 0.75 * fade))
+		draw_rect(Rect2(at, Vector2(CAP, CAP)), Color(0.96, 0.94, 0.88, fade))
+		draw_rect(Rect2(at + Vector2(0.0, CAP - 4.0), Vector2(CAP, 4.0)), Color(0.78, 0.75, 0.68, fade))
+		var ink := Color(0.12, 0.12, 0.16, fade)
+		var c := at + Vector2(CAP, CAP - 4.0) * 0.5
+		if text == "<" or text == ">":
+			# Arrow keys are drawn, since the font may not have the glyphs.
+			var d := -1.0 if text == "<" else 1.0
+			draw_colored_polygon(PackedVector2Array([c + Vector2(7.0 * d, 0.0), c + Vector2(-5.0 * d, -7.0), c + Vector2(-5.0 * d, 7.0)]), ink)
+		else:
+			var w := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 19).x
+			draw_string(font, c + Vector2(-w * 0.5, 7.0), text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 19, ink)

@@ -42,6 +42,8 @@ var puzzle := false
 var start_pips := 1
 ## Skill levels the dog starts this room with, e.g. {"stay": 2}.
 var skills := {}
+## Commands this room introduces, shown once as key hints when it begins.
+var keys: Array = []
 var C_DIRT := Color("6b5442")
 var C_DIRT_DARK := Color("58432f")
 var C_DIRT_LIGHT := Color("7e6650")
@@ -75,6 +77,7 @@ func build(data: Dictionary) -> void:
 	puzzle = data.get("puzzle", false)
 	start_pips = int(data.get("hunger", 1))
 	skills = data.get("skills", {})
+	keys = data.get("keys", [])
 	var look: Dictionary = THEMES.get(theme, THEMES["woods"])
 	C_DIRT = Color(look["dirt"])
 	C_DIRT_DARK = Color(look["dirt_dark"])
@@ -154,7 +157,7 @@ func build(data: Dictionary) -> void:
 					enemy.position = feet
 					add_child(enemy)
 				_:
-					if labels.has(ch):
+					if labels.has(ch) and data.get("show_labels", false):
 						_add_label(Vector2(x * TILE, y * TILE), labels[ch])
 	if not has_dog_spawn:
 		dog_spawn = player_spawn + Vector2(-40.0, 0.0)

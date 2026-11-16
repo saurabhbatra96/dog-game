@@ -62,10 +62,21 @@ def hill(g, first, last, step_from=None):
 rooms = []
 cases = []
 
+# The commands a room introduces. They pop up as key hints when it begins,
+# the first time only. There is no other text in the rooms.
+KEYS = {
+    "Sit. Stay.": ["move", "jump", "stay", "call_dog"],
+    "Good dog": ["feed"],
+    "Fetch": ["fetch"],
+    "Featherweight": ["throw"],
+}
+
 
 def room(name, g, labels=None, hunger=1, skills=None, extra=None, solve=None, mistakes=None):
+    # Lowercase letters once marked where teaching text went; rooms carry none now.
+    rows = ["".join("." if ch.islower() else ch for ch in r) for r in g]
     rooms.append({
-        "name": name, "labels": labels or {}, "map": "\n".join("".join(r) for r in g),
+        "name": name, "keys": KEYS.get(name, []), "map": "\n".join(rows),
         "hunger": hunger, "skills": skills or {}, "extra": extra or {},
     })
     if solve:
@@ -351,10 +362,9 @@ def entry(r):
         out += '\t\t"skills": %s,\n' % json.dumps(r["skills"])
     for key, value in r["extra"].items():
         out += '\t\t"%s": %s,\n' % (key, json.dumps(value))
-    out += '\t\t"labels": {\n'
-    for key, value in r["labels"].items():
-        out += '\t\t\t"%s": "%s",\n' % (key, value)
-    return out + '\t\t},\n\t\t"map": """\n%s\n""",\n\t},\n' % r["map"]
+    if r["keys"]:
+        out += '\t\t"keys": %s,\n' % json.dumps(r["keys"])
+    return out + '\t\t"map": """\n%s\n""",\n\t},\n' % r["map"]
 
 
 path = os.path.join(ROOT, "scripts", "level_maps.gd")

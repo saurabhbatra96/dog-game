@@ -4,18 +4,20 @@ extends Node
 
 
 func _enter_tree() -> void:
-	_action("move_left", [KEY_A, KEY_LEFT], [JOY_BUTTON_DPAD_LEFT], JOY_AXIS_LEFT_X, -1.0)
-	_action("move_right", [KEY_D, KEY_RIGHT], [JOY_BUTTON_DPAD_RIGHT], JOY_AXIS_LEFT_X, 1.0)
-	_action("jump", [KEY_SPACE, KEY_W, KEY_UP], [JOY_BUTTON_A])
-	_action("stay", [KEY_S, KEY_DOWN], [JOY_BUTTON_DPAD_DOWN])
-	_action("call_dog", [KEY_E], [JOY_BUTTON_X])
-	_action("fetch", [KEY_G], [JOY_BUTTON_B])
-	_action("pet_dog", [KEY_F], [JOY_BUTTON_Y])
-	_action("feed", [KEY_T], [JOY_BUTTON_LEFT_SHOULDER])
-	_action("throw", [KEY_H], [JOY_BUTTON_RIGHT_SHOULDER])
+	# Arrow keys and a cluster under the left hand, in the style of a
+	# classic keyboard platformer.
+	_action("move_left", [KEY_LEFT], [JOY_BUTTON_DPAD_LEFT], JOY_AXIS_LEFT_X, -1.0)
+	_action("move_right", [KEY_RIGHT], [JOY_BUTTON_DPAD_RIGHT], JOY_AXIS_LEFT_X, 1.0)
+	_action("jump", [KEY_Z, KEY_SPACE], [JOY_BUTTON_A])
+	_action("stay", [KEY_X], [JOY_BUTTON_X])
+	_action("call_dog", [KEY_C], [JOY_BUTTON_B])
+	_action("fetch", [KEY_A], [JOY_BUTTON_Y])
+	_action("throw", [KEY_S], [JOY_BUTTON_RIGHT_SHOULDER])
+	# One key for kindness: a biscuit if you have one, otherwise a pat.
+	_action("feed", [KEY_D], [JOY_BUTTON_LEFT_SHOULDER])
 	_action("restart", [KEY_R], [])
-	_action("next_level", [KEY_BRACKETRIGHT, KEY_N], [])
-	_action("prev_level", [KEY_BRACKETLEFT, KEY_B], [])
+	_action("next_level", [KEY_BRACKETRIGHT], [])
+	_action("prev_level", [KEY_BRACKETLEFT], [])
 	_action("toggle_debug", [KEY_TAB], [])
 
 
