@@ -9,6 +9,7 @@ func _enter_tree() -> void:
 	_action("jump", [KEY_SPACE, KEY_W, KEY_UP], [JOY_BUTTON_A])
 	_action("call_dog", [KEY_E], [JOY_BUTTON_X])
 	_action("pet_dog", [KEY_F], [JOY_BUTTON_Y])
+	_action("attack", [KEY_J, KEY_X], [JOY_BUTTON_B])
 	_action("restart", [KEY_R], [])
 	_action("next_level", [KEY_BRACKETRIGHT, KEY_N], [JOY_BUTTON_RIGHT_SHOULDER])
 	_action("prev_level", [KEY_BRACKETLEFT, KEY_B], [JOY_BUTTON_LEFT_SHOULDER])

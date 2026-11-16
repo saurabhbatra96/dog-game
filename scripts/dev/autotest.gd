@@ -3,7 +3,7 @@ extends Node
 ## bot, logs how the dog copes, and saves screenshots.
 ##   godot --path . -- --autotest=/some/output/folder
 
-const LEVEL_SECONDS := 34.0
+const LEVEL_SECONDS := 24.0
 
 var main: Node
 var out_dir := ""
@@ -19,6 +19,7 @@ var _shots := 0
 var _jump_hold := 0.0
 var _was_rescue := false
 var _acts := {}
+var _swing := 0.0
 
 
 func _ready() -> void:
@@ -54,9 +55,9 @@ func _physics_process(delta: float) -> void:
 	_log_t -= delta
 	if _log_t <= 0.0:
 		_log_t = 1.0
-		print("[autotest] level=%d t=%4.1f player=%s dog=%s act=%s mood=%s links=%d" % [
+		print("[autotest] level=%d t=%4.1f player=%s dog=%s act=%s mood=%s links=%d hp=%d" % [
 			index, _level_t, _player.global_position.round(), _dog.global_position.round(),
-			Dog.Act.keys()[_dog.act], Dog.Mood.keys()[_dog.mood], _dog.link_count()])
+			Dog.Act.keys()[_dog.act], Dog.Mood.keys()[_dog.mood], _dog.link_count(), _player.health])
 	_shot_t -= delta
 	if _shot_t <= 0.0 and out_dir != "":
 		_shot_t = 1.7
@@ -78,8 +79,8 @@ func _finish_level() -> void:
 ## Stands still at the start (to show idle behaviour), then runs right,
 ## jumping at gaps and walls, with a short breather every so often.
 func _drive_bot(delta: float) -> void:
-	var resting := _level_t < 7.0 or fmod(_level_t, 11.0) > 8.5
-	if _level_t > 3.0 and _level_t < 3.1:
+	var resting := _level_t < 5.0 or fmod(_level_t, 11.0) > 8.5
+	if (_level_t > 1.5 and _level_t < 1.6) or (_level_t > 3.2 and _level_t < 3.3):
 		Input.action_press("pet_dog")
 	else:
 		Input.action_release("pet_dog")
@@ -87,9 +88,27 @@ func _drive_bot(delta: float) -> void:
 		_jump_hold -= delta
 		if _jump_hold <= 0.0:
 			Input.action_release("jump")
+	# Dawdle just short of the flag, to let the dog tow us over the line.
+	var level: Level = main.get("level")
+	for goal in level.goals:
+		var gap := goal.x - _player.global_position.x
+		if gap > 60.0 and gap < 180.0 and absf(goal.y - _player.global_position.y) < 8.0:
+			resting = true
 	if resting and _player.is_on_floor():
 		Input.action_release("move_right")
 		return
+	# Stand and swing at any enemy just ahead.
+	_swing -= delta
+	Input.action_release("attack")
+	for node in get_tree().get_nodes_in_group("enemies"):
+		var enemy := node as Enemy
+		var d := enemy.global_position - _player.global_position
+		if not enemy.is_dead() and d.x > -20.0 and d.x < 60.0 and absf(d.y) < 40.0:
+			Input.action_release("move_right")
+			if _swing <= 0.0 and d.x < 40.0:
+				_swing = 0.36
+				Input.action_press("attack")
+			return
 	Input.action_press("move_right")
 	if not _player.is_on_floor() or _jump_hold > 0.0:
 		return

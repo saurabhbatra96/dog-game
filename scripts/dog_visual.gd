@@ -37,6 +37,7 @@ var _next_blink := 2.0
 var _look := Vector2.RIGHT
 var _emote_shown := ""
 var _emote_pop := 0.0
+var _roll := 0.0
 
 
 func _ready() -> void:
@@ -76,7 +77,12 @@ func _process(delta: float) -> void:
 	var forward := dog.velocity.x * face_sign
 
 	# Poses blend in and out rather than snapping.
-	_sit = lerpf(_sit, 1.0 if dog.act == Dog.Act.SIT else 0.0, k)
+	var petted := dog.act == Dog.Act.PETTED
+	_sit = lerpf(_sit, 1.0 if dog.act == Dog.Act.SIT or (petted and dog.pet_style == Dog.PET_LEAN) else 0.0, k)
+	# Rolling over for a belly rub.
+	_roll = lerpf(_roll, PI if petted and dog.pet_style == Dog.PET_ROLL else 0.0, k * 0.8)
+	if _roll > 1.0:
+		_run_phase += delta * 13.0
 	_lie = lerpf(_lie, 1.0 if dog.act == Dog.Act.LIE else 0.0, k * 0.6)
 	var crouch_target := 0.0
 	if dog.mood == Dog.Mood.WARY:
@@ -91,7 +97,7 @@ func _process(delta: float) -> void:
 		sniff_target = 0.45
 	_sniff = lerpf(_sniff, sniff_target, k * 0.8)
 	_tilt = lerpf(_tilt, 0.3 if dog.mood == Dog.Mood.CURIOUS else 0.0, k * 0.7)
-	_happy = lerpf(_happy, 1.0 if dog.emote == "heart" else 0.0, k)
+	_happy = lerpf(_happy, 1.0 if dog.emote == "heart" or petted else 0.0, k)
 
 	if dog.is_on_floor():
 		_run_phase += absf(dog.velocity.x) * delta * 0.09
@@ -185,7 +191,9 @@ func _draw() -> void:
 		Shapes.ellipse(self, Vector2(0.0, 0.5), 15.0 * sx, 2.6, Color(0, 0, 0, 0.22))
 
 	# root: flip and squash about the feet. rel: body pose on top of that.
-	var root := Transform2D.IDENTITY.scaled(Vector2(flip * sx, sy))
+	var root := Transform2D.IDENTITY.scaled(Vector2(flip * sx, sy)) * _pivot(_roll, Vector2(0.0, -9.0))
+	if _roll > 0.6:
+		run = 0.7
 	var pitch := 0.12 * _sniff
 	if on_floor:
 		pitch += clampf(forward * 0.00022, -0.08, 0.08)
@@ -214,6 +222,13 @@ func _draw() -> void:
 		outline = pass_index == 0
 		_draw_dog(root, rel, head_xf, look, leg, run)
 	outline = false
+
+	# Bark: arcs of sound bursting from the muzzle.
+	if dog.bark_time > 0.0:
+		var loud := dog.bark_time / 0.3
+		draw_set_transform_matrix(root)
+		for r: float in [6.0, 11.0]:
+			draw_arc(head + Vector2(12.0, 2.0), r + (1.0 - loud) * 7.0, -0.8, 0.8, 7, Color(LINE, loud), 1.8, Shapes.AA)
 
 	# Thought bubble, unflipped.
 	draw_set_transform_matrix(Transform2D.IDENTITY)
@@ -266,7 +281,7 @@ func _draw_dog(root: Transform2D, rel: Transform2D, head_xf: Transform2D, look: 
 		return
 
 	draw_circle(Vector2(11.4, 1.6), 1.6, C_DARK, true, -1.0, Shapes.AA)
-	var panting := _happy > 0.5 or (dog.mood == Dog.Mood.EXCITED and absf(dog.velocity.x) > 60.0)
+	var panting := _happy > 0.5 or dog.act == Dog.Act.DRAG or (dog.mood == Dog.Mood.EXCITED and absf(dog.velocity.x) > 60.0)
 	if panting:
 		draw_rect(Rect2(6.6, 4.4, 4.4, 1.4), C_DARK)
 		draw_rect(Rect2(7.6, 5.2, 2.8, 3.0 + sin(_t * 14.0) * 0.7), C_TONGUE)

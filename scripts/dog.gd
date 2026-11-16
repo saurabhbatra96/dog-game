@@ -13,7 +13,9 @@ signal landed(impact: float)
 signal perked
 
 enum Mood { CALM, CURIOUS, EXCITED, WARY }
-enum Act { STAND, FOLLOW, LEAD, SIT, LIE, WANDER, SNIFF, INVESTIGATE, COWER, COME, WAIT, LEAP, RESCUE }
+enum Act { STAND, FOLLOW, LEAD, SIT, LIE, WANDER, SNIFF, INVESTIGATE, COWER, COME, WAIT, LEAP, RESCUE, DISTRACT, PETTED, DRAG }
+## The ways it can react to being petted.
+enum { PET_LEAN, PET_ROLL, PET_SPIN, PET_LICK }
 
 ## One airborne stretch of the player's path: where they left the ground,
 ## where they landed, and how high they got in between.
@@ -50,6 +52,16 @@ const HALF_WIDTH := 10.5
 ## Beyond this distance it gives up on walking and bounds straight to the player.
 @export var rescue_distance := 720.0
 
+@export_group("Distraction")
+## The dog decides for itself when to distract an enemy. After each attempt it
+## waits a random time between these two values, in seconds, before the next.
+@export var distract_wait_min := 6.0
+@export var distract_wait_max := 11.0
+## How long an enemy stays distracted, in seconds (also randomised a little).
+@export var distract_seconds := 3.2
+## Seconds the player must dawdle near the flag before being towed to it.
+@export var drag_after := 3.0
+
 @export_group("Personality")
 ## Seconds the player must stand still before the dog sits.
 @export var sit_after := 0.9
@@ -74,6 +86,21 @@ var kill_y := 1.0e9
 var rescue_count := 0
 ## True while it waits at a ledge for the player to land, ready to jump after them.
 var braced := false
+## Counts down while a bark is showing.
+var bark_time := 0.0
+## Which petting reaction is playing (PET_LEAN, PET_ROLL, PET_SPIN, PET_LICK).
+var pet_style := PET_LEAN
+
+var _enemy: Enemy = null
+var _barked := false
+var _bark_timer := 0.0
+var _distract_cd := 3.0
+var _dragging := false
+var _grabbed := false
+var _drag_goal_x := 0.0
+var _drag_dir := 1.0
+var _drag_block := 0.0
+var _spin_timer := 0.0
 
 var _act_time := 0.0
 var _act_len := 0.0
@@ -142,6 +169,12 @@ func reset(to: Vector2) -> void:
 	_wait_time = 0.0
 	_far_time = 0.0
 	_called = 0.0
+	_enemy = null
+	_barked = false
+	_distract_cd = randf_range(2.0, 4.0)
+	_dragging = false
+	_drag_block = 0.0
+	player.dragged = false
 	_poi = null
 	_scary = null
 	_poi_cooldown = 1.0
@@ -170,18 +203,43 @@ func call_dog() -> void:
 	perked.emit()
 
 
-## Returns true if the dog was close enough to be petted.
+## Returns true if the dog was close enough to be petted. Each time it picks
+## a different reaction: leaning in, rolling over, spinning, or jumping up.
 func pet() -> bool:
-	if act == Act.RESCUE or act == Act.LEAP or not is_on_floor():
+	if act == Act.RESCUE or act == Act.LEAP or not is_on_floor() or _dragging or _enemy != null:
 		return false
 	if global_position.distance_to(player.global_position) > 64.0:
 		return false
-	say("heart", 1.6)
+	pet_style = (pet_style + 1 + randi() % 3) % 4
+	say("heart", 1.8)
 	energy = minf(energy + 0.25, 1.0)
-	_set_act(Act.SIT)
+	_drop_poi(3.0)
+	_set_act(Act.PETTED)
+	_act_time = 0.0
 	_act_len = 2.2
-	_sniffs = 0
 	return true
+
+
+func can_drag() -> bool:
+	return _drag_block <= 0.0 and not _dragging and _enemy == null and _links.is_empty() and _direct \
+			and is_on_floor() and act != Act.LEAP and act != Act.RESCUE and act != Act.PETTED
+
+
+## Fetch the player and tow them to goal_x by the tie.
+func start_drag(goal_x: float) -> void:
+	_dragging = true
+	_grabbed = false
+	_drag_goal_x = goal_x
+	_drag_dir = 1.0 if goal_x >= player.global_position.x else -1.0
+	_drop_poi(4.0)
+	_set_act(Act.DRAG)
+	_act_time = 0.0
+	say("!", 0.7)
+	perked.emit()
+
+
+func is_walkable(from: Vector2, to: Vector2) -> bool:
+	return _walkable(from, to)
 
 
 func say(text: String, seconds: float) -> void:
@@ -208,6 +266,9 @@ func _physics_process(delta: float) -> void:
 		return
 	_act_time += delta
 	_called = maxf(_called - delta, 0.0)
+	_distract_cd = maxf(_distract_cd - delta, 0.0)
+	_drag_block = maxf(_drag_block - delta, 0.0)
+	bark_time = maxf(bark_time - delta, 0.0)
 	_poi_cooldown = maxf(_poi_cooldown - delta, 0.0)
 	if _emote_time > 0.0:
 		_emote_time -= delta
@@ -347,7 +408,27 @@ func _scan_pois() -> void:
 		elif not poi.seen and d < best_dist:
 			best = poi
 			best_dist = d
-	var busy := act == Act.LEAP or act == Act.RESCUE or not _links.is_empty() or _called > 0.0
+	var busy := act == Act.LEAP or act == Act.RESCUE or not _links.is_empty() or _called > 0.0 \
+			or _enemy != null or _dragging or act == Act.PETTED
+
+	# Pick a fight to meddle in. The timing is the dog's own: a random wait
+	# after each attempt, which the player cannot hurry.
+	if _distract_cd <= 0.0 and not busy and is_on_floor():
+		var nearest := 300.0
+		for node in get_tree().get_nodes_in_group("enemies"):
+			var enemy := node as Enemy
+			if enemy == null or not enemy.is_hunting():
+				continue
+			var d := enemy.global_position.distance_to(global_position)
+			if d < nearest and absf(enemy.global_position.y - global_position.y) < 70.0:
+				nearest = d
+				_enemy = enemy
+		if _enemy != null:
+			_barked = false
+			_drop_poi(3.0)
+			_set_act(Act.DISTRACT)
+			_act_time = 0.0
+			busy = true
 	if best != null and _poi == null and _poi_cooldown <= 0.0 and not busy and _scary == null:
 		_poi = best
 		_poi_phase = 0
@@ -500,6 +581,14 @@ func _free_step(delta: float) -> void:
 	if not is_on_floor():
 		velocity.x = move_toward(velocity.x, 0.0, 300.0 * delta)
 		return
+	if _enemy != null:
+		_distract_step(delta)
+		return
+	if _dragging:
+		_drag_step(delta)
+		return
+	if act == Act.PETTED and _petted_step(delta):
+		return
 	if not _direct:
 		# Cannot walk to the player and has no jumps to replay: it is lost.
 		_set_act(Act.WAIT)
@@ -617,6 +706,107 @@ func _come_step(delta: float, dist: float) -> void:
 		hopped.emit()
 		energy = minf(energy + 0.3, 1.0)
 		_set_act(Act.STAND)
+
+
+## Run at the enemy, bark to turn its head, then dance just out of reach
+## until it loses interest.
+func _distract_step(delta: float) -> void:
+	if not is_instance_valid(_enemy) or _enemy.is_dead():
+		_end_distract(true)
+		return
+	_set_act(Act.DISTRACT)
+	var ex := _enemy.global_position.x
+	var dx := ex - global_position.x
+	if not _barked:
+		var can_walk := _walkable(global_position, Vector2(ex, global_position.y))
+		if absf(dx) < 84.0 or (not can_walk and absf(dx) < 240.0):
+			_barked = true
+			_bark_timer = 0.0
+			_enemy.distract(self, distract_seconds * randf_range(0.85, 1.2))
+			say("!", 0.6)
+		elif can_walk and _act_time < 2.5:
+			_drive(ex, max_speed * 1.1, delta, 64.0, 8.0)
+		else:
+			_end_distract(false)
+	else:
+		var side := 1.0 if global_position.x >= ex else -1.0
+		_drive(ex + side * 60.0, max_speed * 0.7, delta, 4.0, 6.0)
+		_bark_timer -= delta
+		if _bark_timer <= 0.0 and is_on_floor():
+			_bark_timer = 0.55
+			bark_time = 0.3
+			velocity.y = -150.0
+			hopped.emit()
+		if not _enemy.is_distracted():
+			_end_distract(true)
+	# The player has moved on: so does the dog.
+	if _enemy != null and absf(player.global_position.x - global_position.x) > 280.0:
+		_end_distract(true)
+
+
+func _end_distract(worked: bool) -> void:
+	_enemy = null
+	_barked = false
+	_distract_cd = randf_range(distract_wait_min, distract_wait_max) if worked else 2.0
+	_set_act(Act.STAND)
+
+
+## Returns true while the petting reaction is still playing.
+func _petted_step(delta: float) -> bool:
+	var player_left := absf(player.velocity.x) > 40.0 and _act_time > 0.3
+	if _act_time > _act_len or player_left:
+		_set_act(Act.STAND)
+		return false
+	var beat := fmod(_act_time, 0.55) < delta * 1.5
+	match pet_style:
+		PET_SPIN:
+			_brake(delta)
+			_spin_timer -= delta
+			if _spin_timer <= 0.0:
+				_spin_timer = 0.14
+				facing = -facing
+			if beat:
+				velocity.y = -170.0
+				hopped.emit()
+		PET_LICK:
+			_drive(player.global_position.x, max_speed * 0.6, delta, 10.0, 8.0)
+			if beat and absf(player.global_position.x - global_position.x) < 26.0:
+				velocity.y = -215.0
+				hopped.emit()
+		_:
+			_brake(delta)
+	return true
+
+
+## Trot up, take the tie, and lead the player to the flag.
+func _drag_step(delta: float) -> void:
+	_set_act(Act.DRAG)
+	if not player.dragged:
+		if _grabbed:
+			_end_drag()  # the player shook free
+			return
+		var spot := player.global_position.x + _drag_dir * 18.0
+		_drive(spot, max_speed, delta, 0.0, 9.0)
+		if absf(spot - global_position.x) < 7.0 and player.is_on_floor():
+			_grabbed = true
+			player.dragged = true
+			player.tie_holder = self
+			player.drag_target_x = player.global_position.x
+		elif _act_time > 3.0:
+			_end_drag()
+	else:
+		var clear := _drive(_drag_goal_x + _drag_dir * 30.0, 135.0, delta, 0.0, 6.0)
+		player.drag_target_x = global_position.x - _drag_dir * 18.0
+		if not clear or _act_time > 10.0:
+			_end_drag()
+
+
+func _end_drag() -> void:
+	_dragging = false
+	_grabbed = false
+	player.dragged = false
+	_drag_block = 5.0
+	_set_act(Act.STAND)
 
 
 ## Wary: keep the player between itself and whatever is frightening.
@@ -743,7 +933,7 @@ func _rescue_step(delta: float) -> void:
 # --- where it faces and looks -----------------------------------------------
 
 func _update_facing() -> void:
-	if act == Act.RESCUE:
+	if act == Act.RESCUE or (act == Act.PETTED and pet_style == PET_SPIN):
 		return
 	if absf(velocity.x) > 20.0:
 		facing = 1 if velocity.x > 0.0 else -1
@@ -801,5 +991,10 @@ func _update_look(delta: float) -> void:
 				target = _links[0].to + Vector2(0.0, -20.0)
 		Act.LEAP:
 			target = _leap_to + Vector2(0.0, -10.0)
+		Act.DISTRACT:
+			if is_instance_valid(_enemy):
+				target = _enemy.global_position + Vector2(0.0, -10.0)
+		Act.DRAG:
+			target = here + Vector2(_drag_dir * 80.0, -14.0)
 
 	look_point = look_point.lerp(target, 1.0 - exp(-12.0 * delta))

@@ -5,11 +5,40 @@ extends Node2D
 signal goal_reached
 
 const TILE := 32.0
-const C_DIRT := Color("6b5442")
-const C_DIRT_DARK := Color("58432f")
-const C_DIRT_LIGHT := Color("7e6650")
-const C_GRASS := Color("86c35c")
-const C_GRASS_DARK := Color("5d9f4a")
+## Terrain colours and plant life per theme. "flowers" is how much of the
+## grass is covered by drifts; "drift" lists their colours.
+const THEMES := {
+	"woods": {
+		"dirt": "6b5442", "dirt_dark": "58432f", "dirt_light": "7e6650",
+		"top": "86c35c", "top_dark": "5d9f4a", "tufts": true, "flowers": 0.5,
+		"drift": ["a98bd8", "a98bd8", "8f6fc9", "c3a6ea", "ffd95a", "fff6ea", "f29bb8"],
+	},
+	"meadow": {
+		"dirt": "86694a", "dirt_dark": "6d5338", "dirt_light": "9b7d5a",
+		"top": "cdb95e", "top_dark": "a39242", "tufts": true, "flowers": 0.6,
+		"drift": ["f4d23a", "f4d23a", "ffe27a", "fff6ea", "e9a53a"],
+	},
+	"town": {
+		"dirt": "5f5a58", "dirt_dark": "4c4846", "dirt_light": "736d69",
+		"top": "a3a29b", "top_dark": "7c7b75", "tufts": false, "flowers": 0.0,
+		"drift": ["f29bb8"],
+	},
+	"night": {
+		"dirt": "222a40", "dirt_dark": "181f31", "dirt_light": "2e3853",
+		"top": "46526f", "top_dark": "313b55", "tufts": false, "flowers": 0.0,
+		"drift": ["a98bd8"],
+	},
+}
+
+var theme := "woods"
+var C_DIRT := Color("6b5442")
+var C_DIRT_DARK := Color("58432f")
+var C_DIRT_LIGHT := Color("7e6650")
+var C_GRASS := Color("86c35c")
+var C_GRASS_DARK := Color("5d9f4a")
+var _tufts := true
+var _flowers := 0.5
+var _drift: Array[Color] = []
 const C_POLE := Color("4a3b30")
 const C_GOAL := Color("e8574c")
 const C_LABEL := Color("fff8e6")
@@ -25,11 +54,24 @@ var _cols := 0
 var _rows := 0
 var _solid := {}
 var _rects: Array[Rect2] = []
-var _goals: Array[Vector2] = []
+## Feet positions of the level exits.
+var goals: Array[Vector2] = []
 
 
 func build(data: Dictionary) -> void:
 	title = data.get("name", "")
+	theme = data.get("theme", "woods")
+	var look: Dictionary = THEMES.get(theme, THEMES["woods"])
+	C_DIRT = Color(look["dirt"])
+	C_DIRT_DARK = Color(look["dirt_dark"])
+	C_DIRT_LIGHT = Color(look["dirt_light"])
+	C_GRASS = Color(look["top"])
+	C_GRASS_DARK = Color(look["top_dark"])
+	_tufts = look["tufts"]
+	_flowers = look["flowers"]
+	_drift.clear()
+	for hex: String in look["drift"]:
+		_drift.append(Color(hex))
 	var labels: Dictionary = data.get("labels", {})
 	var lines: Array[String] = []
 	for line: String in String(data["map"]).split("\n"):
@@ -63,6 +105,10 @@ func build(data: Dictionary) -> void:
 					_add_poi(feet, Poi.Kind.SCARY)
 				">":
 					_add_goal(feet)
+				"E":
+					var enemy := Enemy.new()
+					enemy.position = feet
+					add_child(enemy)
 				_:
 					if labels.has(ch):
 						_add_label(Vector2(x * TILE, y * TILE), labels[ch])
@@ -139,7 +185,7 @@ func _add_goal(feet: Vector2) -> void:
 	area.add_child(collider)
 	area.body_entered.connect(_on_goal_entered)
 	add_child(area)
-	_goals.append(feet)
+	goals.append(feet)
 
 
 func _on_goal_entered(body: Node2D) -> void:
@@ -191,9 +237,9 @@ func _draw() -> void:
 		for n in 4:
 			var x := n * 8.0
 			# Blades poking up, and grass hanging down over the earth.
-			if _rand(cell, 40 + n) < 0.6:
+			if _tufts and _rand(cell, 40 + n) < 0.6:
 				draw_rect(Rect2(corner + Vector2(x + 2.0, -4.0), Vector2(3.0, 4.0)), C_GRASS)
-			if _rand(cell, 50 + n) < 0.5:
+			if _tufts and _rand(cell, 50 + n) < 0.5:
 				draw_rect(Rect2(corner + Vector2(x, 12.0), Vector2(4.0, 4.0)), C_GRASS_DARK)
 
 	# Wildflowers. Most grow in drifts of one colour that carpet a stretch of
@@ -203,8 +249,10 @@ func _draw() -> void:
 			continue
 		var corner := Vector2(cell.x, cell.y) * TILE
 		var drift := floori(cell.x / 4.0) * 131 + cell.y * 17
-		var in_drift := Backdrop.rand(drift, 63) < 0.5
-		var color: Color = DRIFT_COLORS[int(Backdrop.rand(drift, 64) * DRIFT_COLORS.size()) % DRIFT_COLORS.size()]
+		if _flowers <= 0.0:
+			continue
+		var in_drift := Backdrop.rand(drift, 63) < _flowers
+		var color: Color = _drift[int(Backdrop.rand(drift, 64) * _drift.size()) % _drift.size()]
 		var count := 8 if in_drift else (1 if _rand(cell, 65) < 0.3 else 0)
 		for n in count:
 			var x := corner.x + _rand(cell, 70 + n) * TILE
@@ -213,7 +261,7 @@ func _draw() -> void:
 			draw_rect(Rect2(x + 0.6, corner.y - h, 1.4, h), C_STEM)
 			# Taller ones carry a spike of two blooms.
 			draw_rect(Rect2(x, corner.y - h - 2.7, 2.7, 2.7 if h < 5.5 else 5.4), tint)
-		if not in_drift and _rand(cell, 60) < 0.07:
+		if theme == "woods" and not in_drift and _rand(cell, 60) < 0.07:
 			# Drawn at reduced size so it sits among the small flowers.
 			var at := corner + Vector2(TILE * 0.5, 0.0)
 			draw_set_transform(at, 0.0, Vector2(0.62, 0.62))
@@ -230,7 +278,7 @@ func _draw() -> void:
 					_big_leaves(Vector2.ZERO, _rand(cell, 62))
 			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
-	for feet in _goals:
+	for feet in goals:
 		draw_rect(Rect2(feet + Vector2(-2.0, -60.0), Vector2(4.0, 60.0)), C_POLE)
 		draw_colored_polygon(PackedVector2Array([
 			feet + Vector2(2.0, -60.0), feet + Vector2(28.0, -50.0), feet + Vector2(2.0, -40.0),
@@ -239,11 +287,6 @@ func _draw() -> void:
 
 # --- plants -------------------------------------------------------------------
 
-## Drift colours, weighted toward lavender.
-const DRIFT_COLORS: Array[Color] = [
-	Color("a98bd8"), Color("a98bd8"), Color("8f6fc9"), Color("c3a6ea"),
-	Color("ffd95a"), Color("fff6ea"), Color("f29bb8"),
-]
 const C_STEM := Color("3f8a4a")
 const C_LEAF := Color("58ad5c")
 const C_LEAF_DARK := Color("3c8648")

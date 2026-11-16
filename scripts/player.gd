@@ -7,6 +7,9 @@ extends CharacterBody2D
 signal jumped
 signal landed(impact: float)
 signal respawned
+signal attacked
+signal hurt
+signal died
 
 @export_group("Run")
 ## Top running speed, pixels per second.
@@ -41,17 +44,46 @@ signal respawned
 ## Pixels the player is nudged sideways to slip past a ceiling corner.
 @export var corner_correction := 6
 
+@export_group("Combat")
+@export var max_health := 5
+## Seconds between swings.
+@export var attack_cooldown := 0.32
+## How far in front a swing reaches, in pixels.
+@export var attack_reach := 42.0
+## Seconds of safety after being hit.
+@export var hurt_safety := 1.0
+
 var facing := 1
 var input_x := 0.0
 var control_enabled := true
 ## Last spot the player stood on solid ground; used for respawning.
 var last_safe_position := Vector2.ZERO
 
+var health := 5
+## Counts down while a swing is on screen.
+var attack_time := 0.0
+## Counts down while the player cannot be hurt again.
+var invulnerable := 0.0
+## Counts down while kneeling to pet the dog.
+var petting := 0.0
+## Set by the dog while it tows the player along by the tie.
+var dragged := false
+var drag_target_x := 0.0
+## Whoever has the other end of the tie.
+var tie_holder: Node2D
+
 var _coyote := 0.0
 var _buffer := 0.0
 var _rising_from_jump := false
 var _was_on_floor := true
 var _floor_time := 0.0
+var _attack_cd := 0.0
+var _stun := 0.0
+
+
+func _ready() -> void:
+	add_to_group("player")
+	health = max_health
 
 
 func gravity() -> float:
@@ -64,22 +96,39 @@ func jump_speed() -> float:
 
 func _physics_process(delta: float) -> void:
 	var on_floor := is_on_floor()
-	input_x = Input.get_axis("move_left", "move_right") if control_enabled else 0.0
+	attack_time = maxf(attack_time - delta, 0.0)
+	invulnerable = maxf(invulnerable - delta, 0.0)
+	petting = maxf(petting - delta, 0.0)
+	_attack_cd = maxf(_attack_cd - delta, 0.0)
+	_stun = maxf(_stun - delta, 0.0)
+
+	var can_act := control_enabled and _stun <= 0.0
+	input_x = Input.get_axis("move_left", "move_right") if can_act else 0.0
+	var jump_pressed := can_act and Input.is_action_just_pressed("jump")
+	# Any deliberate input shakes the dog off the tie.
+	if dragged and (absf(input_x) > 0.2 or jump_pressed or not on_floor):
+		dragged = false
 	if absf(input_x) > 0.2:
 		facing = 1 if input_x > 0.0 else -1
+		petting = 0.0
 
 	# Forgiveness timers.
 	_coyote = coyote_time if on_floor else _coyote - delta
-	if control_enabled and Input.is_action_just_pressed("jump"):
+	if jump_pressed:
 		_buffer = jump_buffer_time
 	else:
 		_buffer -= delta
-	var jump_held := control_enabled and Input.is_action_pressed("jump")
+	var jump_held := can_act and Input.is_action_pressed("jump")
 
 	# Horizontal movement.
 	var target := input_x * max_speed
 	var rate := 0.0
-	if on_floor:
+	if dragged:
+		target = clampf((drag_target_x - global_position.x) * 8.0, -max_speed, max_speed)
+		if absf(target) > 10.0:
+			facing = 1 if target > 0.0 else -1
+		rate = ground_accel
+	elif on_floor:
 		if absf(input_x) < 0.01:
 			rate = ground_decel
 		elif signf(target) != signf(velocity.x) and absf(velocity.x) > 10.0:
@@ -113,6 +162,9 @@ func _physics_process(delta: float) -> void:
 			velocity.y *= jump_cut_mult
 			_rising_from_jump = false
 
+	if can_act and _attack_cd <= 0.0 and Input.is_action_just_pressed("attack"):
+		_attack()
+
 	_correct_corner(delta)
 	var impact := velocity.y
 	move_and_slide()
@@ -124,6 +176,36 @@ func _physics_process(delta: float) -> void:
 	if _floor_time > 0.15:
 		last_safe_position = global_position
 	_was_on_floor = on_floor
+
+
+func _attack() -> void:
+	attack_time = 0.16
+	_attack_cd = attack_cooldown
+	petting = 0.0
+	dragged = false
+	for node in get_tree().get_nodes_in_group("enemies"):
+		var enemy := node as Enemy
+		if enemy == null:
+			continue
+		var d := enemy.global_position - global_position
+		if d.x * facing > -10.0 and d.x * facing < attack_reach and absf(d.y) < 38.0:
+			enemy.take_hit(1, facing)
+	attacked.emit()
+
+
+func take_hit(damage: int, from_x: float) -> void:
+	if invulnerable > 0.0 or health <= 0:
+		return
+	health -= damage
+	invulnerable = hurt_safety
+	_stun = 0.22
+	dragged = false
+	petting = 0.0
+	var away := 1.0 if global_position.x >= from_x else -1.0
+	velocity = Vector2(away * 230.0, -260.0)
+	hurt.emit()
+	if health <= 0:
+		died.emit()
 
 
 ## If the head is about to clip the corner of a block, slide sideways past it
@@ -149,5 +231,7 @@ func teleport(to: Vector2) -> void:
 	_rising_from_jump = false
 	_was_on_floor = true
 	_floor_time = 0.0
+	dragged = false
+	petting = 0.0
 	reset_physics_interpolation()
 	respawned.emit()
