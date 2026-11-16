@@ -40,6 +40,8 @@ var _emote_pop := 0.0
 
 
 func _ready() -> void:
+	# The dog is drawn at reduced scale, so thicken its edge to compensate.
+	grow = 1.9
 	dog.hopped.connect(_on_hopped)
 	dog.landed.connect(_on_landed)
 	dog.perked.connect(_on_perked)

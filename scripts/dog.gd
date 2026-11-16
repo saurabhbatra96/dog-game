@@ -23,7 +23,7 @@ class Link:
 	var apex: float
 
 const WORLD_MASK := 1
-const HALF_WIDTH := 14.0
+const HALF_WIDTH := 10.5
 
 @export_group("Movement")
 @export var max_speed := 350.0

@@ -196,8 +196,108 @@ func _draw() -> void:
 			if _rand(cell, 50 + n) < 0.5:
 				draw_rect(Rect2(corner + Vector2(x, 12.0), Vector2(4.0, 4.0)), C_GRASS_DARK)
 
+	# Wildflowers. Most grow in drifts of one colour that carpet a stretch of
+	# grass; a few strays and the odd tropical plant fill in between.
+	for cell: Vector2i in _solid:
+		if _is_solid(cell.x, cell.y - 1):
+			continue
+		var corner := Vector2(cell.x, cell.y) * TILE
+		var drift := floori(cell.x / 4.0) * 131 + cell.y * 17
+		var in_drift := Backdrop.rand(drift, 63) < 0.5
+		var color: Color = DRIFT_COLORS[int(Backdrop.rand(drift, 64) * DRIFT_COLORS.size()) % DRIFT_COLORS.size()]
+		var count := 8 if in_drift else (1 if _rand(cell, 65) < 0.3 else 0)
+		for n in count:
+			var x := corner.x + _rand(cell, 70 + n) * TILE
+			var h := 2.0 + _rand(cell, 80 + n) * 6.0
+			var tint := color.lightened(0.18) if _rand(cell, 90 + n) < 0.35 else color
+			draw_rect(Rect2(x + 0.6, corner.y - h, 1.4, h), C_STEM)
+			# Taller ones carry a spike of two blooms.
+			draw_rect(Rect2(x, corner.y - h - 2.7, 2.7, 2.7 if h < 5.5 else 5.4), tint)
+		if not in_drift and _rand(cell, 60) < 0.07:
+			# Drawn at reduced size so it sits among the small flowers.
+			var at := corner + Vector2(TILE * 0.5, 0.0)
+			draw_set_transform(at, 0.0, Vector2(0.62, 0.62))
+			match int(_rand(cell, 61) * 5.0):
+				0:
+					_hibiscus(Vector2.ZERO, Color("e2574c"), Color("a8323a"))
+				1:
+					_hibiscus(Vector2.ZERO, Color("f58ab4"), Color("c2437c"))
+				2:
+					_bird_of_paradise(Vector2.ZERO)
+				3:
+					_plumeria(Vector2.ZERO)
+				_:
+					_big_leaves(Vector2.ZERO, _rand(cell, 62))
+			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
 	for feet in _goals:
 		draw_rect(Rect2(feet + Vector2(-2.0, -60.0), Vector2(4.0, 60.0)), C_POLE)
 		draw_colored_polygon(PackedVector2Array([
 			feet + Vector2(2.0, -60.0), feet + Vector2(28.0, -50.0), feet + Vector2(2.0, -40.0),
 		]), C_GOAL)
+
+
+# --- plants -------------------------------------------------------------------
+
+## Drift colours, weighted toward lavender.
+const DRIFT_COLORS: Array[Color] = [
+	Color("a98bd8"), Color("a98bd8"), Color("8f6fc9"), Color("c3a6ea"),
+	Color("ffd95a"), Color("fff6ea"), Color("f29bb8"),
+]
+const C_STEM := Color("3f8a4a")
+const C_LEAF := Color("58ad5c")
+const C_LEAF_DARK := Color("3c8648")
+
+
+func _leaf(from: Vector2, to: Vector2, width: float, color: Color) -> void:
+	var mid := (from + to) * 0.5
+	var side := (to - from).orthogonal().normalized() * width
+	draw_colored_polygon(PackedVector2Array([from, mid + side, to, mid - side]), color)
+
+
+## Five round petals, a dark throat, and a long yellow stamen.
+func _hibiscus(at: Vector2, petal: Color, throat: Color) -> void:
+	draw_rect(Rect2(at.x - 1.0, at.y - 15.0, 2.0, 15.0), C_STEM)
+	_leaf(at + Vector2(0.0, -5.0), at + Vector2(9.0, -10.0), 2.6, C_LEAF)
+	_leaf(at + Vector2(0.0, -8.0), at + Vector2(-9.0, -12.0), 2.6, C_LEAF_DARK)
+	var c := at + Vector2(0.0, -18.0)
+	for k in 5:
+		var angle := -PI * 0.5 + TAU * k / 5.0
+		draw_circle(c + Vector2(cos(angle), sin(angle)) * 4.2, 3.7, petal)
+	draw_circle(c, 2.4, throat)
+	draw_line(c, c + Vector2(4.0, -6.0), Color("ffe38a"), 1.4)
+	draw_rect(Rect2(c + Vector2(3.0, -8.0), Vector2(2.7, 2.7)), Color("ffd23c"))
+
+
+## Tall blades with an orange and blue crest.
+func _bird_of_paradise(at: Vector2) -> void:
+	_leaf(at, at + Vector2(-8.0, -22.0), 3.4, C_LEAF_DARK)
+	_leaf(at, at + Vector2(9.0, -19.0), 3.4, C_LEAF)
+	draw_rect(Rect2(at.x - 1.0, at.y - 22.0, 2.0, 22.0), C_STEM)
+	var c := at + Vector2(0.0, -22.0)
+	_leaf(c + Vector2(-2.0, 1.0), c + Vector2(9.0, -2.0), 2.0, Color("7a4f8f"))
+	draw_colored_polygon(PackedVector2Array([c, c + Vector2(1.0, -11.0), c + Vector2(4.0, -2.0)]), Color("ff8a2a"))
+	draw_colored_polygon(PackedVector2Array([c + Vector2(2.0, -1.0), c + Vector2(7.0, -10.0), c + Vector2(6.0, -2.0)]), Color("ffb23c"))
+	draw_colored_polygon(PackedVector2Array([c + Vector2(4.0, -2.0), c + Vector2(12.0, -7.0), c + Vector2(8.0, -1.0)]), Color("ff8a2a"))
+	draw_colored_polygon(PackedVector2Array([c + Vector2(3.0, -2.0), c + Vector2(11.0, -3.0), c + Vector2(6.0, 0.0)]), Color("4667d6"))
+
+
+## A low shrub with clusters of white and yellow pinwheel flowers.
+func _plumeria(at: Vector2) -> void:
+	draw_circle(at + Vector2(-5.0, -4.0), 5.5, C_LEAF_DARK)
+	draw_circle(at + Vector2(5.0, -5.0), 6.0, C_LEAF)
+	draw_circle(at + Vector2(0.0, -9.0), 5.5, C_LEAF)
+	for bloom: Vector2 in [Vector2(-5.0, -8.0), Vector2(4.0, -11.0), Vector2(7.0, -4.0), Vector2(-1.0, -13.0)]:
+		var c := at + bloom
+		for k in 4:
+			var angle := PI * 0.25 + TAU * k / 4.0
+			draw_rect(Rect2(c + Vector2(cos(angle), sin(angle)) * 2.4 - Vector2(1.35, 1.35), Vector2(2.7, 2.7)), Color("fffaf0"))
+		draw_rect(Rect2(c - Vector2(1.35, 1.35), Vector2(2.7, 2.7)), Color("ffd23c"))
+
+
+## A fan of broad jungle leaves.
+func _big_leaves(at: Vector2, roll: float) -> void:
+	_leaf(at, at + Vector2(-13.0, -11.0 - roll * 5.0), 4.0, C_LEAF_DARK)
+	_leaf(at, at + Vector2(12.0, -13.0), 4.2, C_LEAF_DARK)
+	_leaf(at, at + Vector2(-3.0 + roll * 6.0, -19.0), 4.4, C_LEAF)
+	draw_line(at, at + Vector2(-3.0 + roll * 6.0, -19.0), C_LEAF_DARK, 1.4)
