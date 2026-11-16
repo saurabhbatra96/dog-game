@@ -50,6 +50,11 @@ signal died
 @export var attack_cooldown := 0.32
 ## How far in front a swing reaches, in pixels.
 @export var attack_reach := 42.0
+## A downward slash that connects bounces you up by this share of a full jump.
+@export var pogo_bounce := 0.8
+@export var dash_speed := 620.0
+@export var dash_time := 0.15
+@export var dash_cooldown := 0.55
 ## Seconds of safety after being hit.
 @export var hurt_safety := 1.0
 
@@ -62,6 +67,10 @@ var last_safe_position := Vector2.ZERO
 var health := 5
 ## Counts down while a swing is on screen.
 var attack_time := 0.0
+## Which way the current swing points: sideways, up, or down.
+var attack_dir := Vector2.RIGHT
+## Counts down while dashing.
+var dashing := 0.0
 ## Counts down while the player cannot be hurt again.
 var invulnerable := 0.0
 ## Counts down while kneeling to pet the dog.
@@ -71,6 +80,10 @@ var dragged := false
 var drag_target_x := 0.0
 ## Whoever has the other end of the tie.
 var tie_holder: Node2D
+## In a rewind level nothing kills you: a fall or a hit leaves you knocked out
+## until you wind time back.
+var rewind_rules := false
+var knocked_out := false
 
 var _coyote := 0.0
 var _buffer := 0.0
@@ -79,6 +92,8 @@ var _was_on_floor := true
 var _floor_time := 0.0
 var _attack_cd := 0.0
 var _stun := 0.0
+var _dash_cd := 0.0
+var _air_dash_used := false
 
 
 func _ready() -> void:
@@ -95,12 +110,15 @@ func jump_speed() -> float:
 
 
 func _physics_process(delta: float) -> void:
+	if Rewind.active or knocked_out:
+		return
 	var on_floor := is_on_floor()
 	attack_time = maxf(attack_time - delta, 0.0)
 	invulnerable = maxf(invulnerable - delta, 0.0)
 	petting = maxf(petting - delta, 0.0)
 	_attack_cd = maxf(_attack_cd - delta, 0.0)
 	_stun = maxf(_stun - delta, 0.0)
+	_dash_cd = maxf(_dash_cd - delta, 0.0)
 
 	var can_act := control_enabled and _stun <= 0.0
 	input_x = Input.get_axis("move_left", "move_right") if can_act else 0.0
@@ -162,6 +180,20 @@ func _physics_process(delta: float) -> void:
 			velocity.y *= jump_cut_mult
 			_rising_from_jump = false
 
+	# Dash: a short burst straight ahead, once per jump.
+	if on_floor:
+		_air_dash_used = false
+	if can_act and _dash_cd <= 0.0 and not _air_dash_used and Input.is_action_just_pressed("dash"):
+		dashing = dash_time
+		_dash_cd = dash_cooldown
+		_air_dash_used = not on_floor
+		_rising_from_jump = false
+		dragged = false
+		petting = 0.0
+	if dashing > 0.0:
+		dashing -= delta
+		velocity = Vector2(facing * dash_speed, 0.0)
+
 	if can_act and _attack_cd <= 0.0 and Input.is_action_just_pressed("attack"):
 		_attack()
 
@@ -178,23 +210,58 @@ func _physics_process(delta: float) -> void:
 	_was_on_floor = on_floor
 
 
+## Swing sideways, or upward while holding up, or downward in the air while
+## holding down. A downward hit bounces you off the enemy.
 func _attack() -> void:
 	attack_time = 0.16
 	_attack_cd = attack_cooldown
 	petting = 0.0
 	dragged = false
+	attack_dir = Vector2(facing, 0.0)
+	if Input.is_action_pressed("aim_up"):
+		attack_dir = Vector2.UP
+	elif Input.is_action_pressed("aim_down") and not is_on_floor():
+		attack_dir = Vector2.DOWN
+	var connected := false
 	for node in get_tree().get_nodes_in_group("enemies"):
 		var enemy := node as Enemy
-		if enemy == null:
+		if enemy == null or enemy.is_dead():
 			continue
-		var d := enemy.global_position - global_position
-		if d.x * facing > -10.0 and d.x * facing < attack_reach and absf(d.y) < 38.0:
+		# Centre of the enemy relative to the centre of the player.
+		var d := enemy.global_position + Vector2(0.0, -9.0) - (global_position + Vector2(0.0, -24.0))
+		var hit := false
+		if attack_dir.x != 0.0:
+			hit = d.x * facing > -10.0 and d.x * facing < attack_reach and absf(d.y) < 34.0
+		elif attack_dir.y < 0.0:
+			hit = absf(d.x) < 24.0 and d.y < 0.0 and d.y > -attack_reach - 30.0
+		else:
+			hit = absf(d.x) < 26.0 and d.y > 0.0 and d.y < attack_reach + 24.0
+		if hit:
 			enemy.take_hit(1, facing)
+			connected = true
+	if connected:
+		if attack_dir.y > 0.0:
+			velocity.y = -jump_speed() * pogo_bounce
+			_rising_from_jump = false
+			_air_dash_used = false
+		elif attack_dir.x != 0.0:
+			velocity.x -= facing * 130.0
+		_hit_stop()
 	attacked.emit()
 
 
+## Freeze the world for a few frames so a hit lands with weight.
+func _hit_stop() -> void:
+	Engine.time_scale = 0.05
+	await get_tree().create_timer(0.06, true, false, true).timeout
+	Engine.time_scale = 1.0
+
+
 func take_hit(damage: int, from_x: float) -> void:
-	if invulnerable > 0.0 or health <= 0:
+	if invulnerable > 0.0 or health <= 0 or knocked_out:
+		return
+	if rewind_rules:
+		knock_out()
 		return
 	health -= damage
 	invulnerable = hurt_safety
@@ -206,6 +273,26 @@ func take_hit(damage: int, from_x: float) -> void:
 	hurt.emit()
 	if health <= 0:
 		died.emit()
+
+
+func knock_out() -> void:
+	knocked_out = true
+	dragged = false
+	petting = 0.0
+	velocity = Vector2.ZERO
+	hurt.emit()
+
+
+func save_state() -> Array:
+	return [global_position, velocity, facing]
+
+
+func load_state(saved: Array) -> void:
+	global_position = saved[0]
+	velocity = saved[1]
+	facing = saved[2]
+	knocked_out = false
+	dragged = false
 
 
 ## If the head is about to clip the corner of a block, slide sideways past it
@@ -233,5 +320,6 @@ func teleport(to: Vector2) -> void:
 	_floor_time = 0.0
 	dragged = false
 	petting = 0.0
+	knocked_out = false
 	reset_physics_interpolation()
 	respawned.emit()

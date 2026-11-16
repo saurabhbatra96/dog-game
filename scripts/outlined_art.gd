@@ -9,23 +9,26 @@ const LINE := Color("4f443c")
 ## How far the dark edge extends past each shape, before the node's own scale.
 var grow := 1.4
 
+## Colour of the dark edge.
+var edge := LINE
+
 var outline := false
 
 
 func blob(center: Vector2, radius: float, color: Color) -> void:
-	draw_circle(center, radius + (grow if outline else 0.0), LINE if outline else color, true, -1.0, Shapes.AA)
+	draw_circle(center, radius + (grow if outline else 0.0), edge if outline else color, true, -1.0, Shapes.AA)
 
 
 func box(rect: Rect2, radius: float, color: Color) -> void:
 	var g := grow if outline else 0.0
-	Shapes.rrect(self, rect.grow(g), radius + g, LINE if outline else color)
+	Shapes.rrect(self, rect.grow(g), radius + g, edge if outline else color)
 
 
 func limb(from: Vector2, to: Vector2, width: float, color: Color) -> void:
-	draw_line(from, to, LINE if outline else color, width + (grow * 2.0 if outline else 0.0), Shapes.AA)
+	draw_line(from, to, edge if outline else color, width + (grow * 2.0 if outline else 0.0), Shapes.AA)
 
 
 func tri(a: Vector2, b: Vector2, c: Vector2, color: Color) -> void:
-	draw_colored_polygon(PackedVector2Array([a, b, c]), LINE if outline else color)
+	draw_colored_polygon(PackedVector2Array([a, b, c]), edge if outline else color)
 	if outline:
-		draw_polyline(PackedVector2Array([a, b, c, a]), LINE, grow * 2.0, Shapes.AA)
+		draw_polyline(PackedVector2Array([a, b, c, a]), edge, grow * 2.0, Shapes.AA)

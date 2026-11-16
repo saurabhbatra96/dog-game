@@ -49,7 +49,7 @@ func _on_hurt() -> void:
 
 
 func mood() -> Mood:
-	if player.invulnerable > player.hurt_safety - 0.55:
+	if player.knocked_out or player.invulnerable > player.hurt_safety - 0.55:
 		return Mood.HURT
 	if player.dragged:
 		return Mood.SURPRISED
@@ -90,6 +90,8 @@ func _draw() -> void:
 	var lean := clampf(player.velocity.x * f * 0.0004, -0.12, 0.12)
 	if player.dragged:
 		lean += 0.22
+	if player.dashing > 0.0:
+		lean += 0.3
 	var xf := Transform2D.IDENTITY.scaled(Vector2(f * sx, sy)) * Transform2D(lean, Vector2.ZERO)
 	draw_set_transform_matrix(xf)
 	var bob := sin(_phase * 2.0) * 1.2 * run + _kneel * 7.0
@@ -99,8 +101,11 @@ func _draw() -> void:
 		_figure(on_floor, run, bob, air, xf)
 	outline = false
 
+	if player.dashing > 0.0:
+		for k in 3:
+			draw_rect(Rect2(-18.0 - k * 9.0, -34.0 + k * 9.0, 12.0, 2.7), Color(1.0, 1.0, 1.0, 0.7 - k * 0.2))
 	if player.attack_time > 0.0:
-		_swing(player.attack_time / 0.16)
+		_swing(player.attack_time / 0.16, player.attack_dir.y * PI * 0.5)
 	draw_set_transform_matrix(Transform2D.IDENTITY)
 
 
@@ -207,12 +212,12 @@ func _arm(on_floor: bool, run: float, bob: float, air: float, near: bool, xf: Tr
 
 
 ## A crescent of motion in front of the swing.
-func _swing(life: float) -> void:
-	var center := Vector2(4.0, -25.0)
+func _swing(life: float, turn: float) -> void:
+	var center := Vector2(2.0, -25.0) + Vector2(cos(turn), sin(turn)) * 2.0
 	var outer := PackedVector2Array()
 	var inner := PackedVector2Array()
 	for k in 9:
-		var angle := -1.25 + 2.5 * k / 8.0 + (1.0 - life) * 0.5
+		var angle := turn - 1.25 + 2.5 * k / 8.0 + (1.0 - life) * 0.5
 		var dir := Vector2(cos(angle), sin(angle))
 		var thick := 0.15 + 0.85 * sin(PI * k / 8.0)
 		outer.append(center + dir * 30.0)

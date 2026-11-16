@@ -89,20 +89,40 @@ func take_hit(damage: int, dir: int) -> bool:
 	return critical
 
 
+func save_state() -> Array:
+	return [global_position, velocity, state, state_time, hp, facing, visible, _immune]
+
+
+func load_state(saved: Array) -> void:
+	global_position = saved[0]
+	velocity = saved[1]
+	state = saved[2]
+	state_time = saved[3]
+	hp = saved[4]
+	facing = saved[5]
+	visible = saved[6]
+	_immune = saved[7]
+	flash = 0.0
+	collision_mask = 0 if state == State.DEAD else 1
+
+
 func _go(next: State) -> void:
 	state = next
 	state_time = 0.0
 
 
 func _physics_process(delta: float) -> void:
+	if Rewind.active:
+		return
 	state_time += delta
 	flash = maxf(flash - delta, 0.0)
 	_immune = maxf(_immune - delta, 0.0)
 	if state == State.DEAD:
 		velocity.y += gravity * delta
 		global_position += velocity * delta
+		# Hidden rather than freed, so that winding time back can revive it.
 		if state_time > 0.45:
-			queue_free()
+			visible = false
 		return
 	if player == null:
 		player = get_tree().get_first_node_in_group("player") as Player

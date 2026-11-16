@@ -71,6 +71,10 @@ func _spring(s: Vector2, target: float, stiffness: float, damping: float, delta:
 func _process(delta: float) -> void:
 	delta = minf(delta, 1.0 / 30.0)
 	_t += delta
+	# Outside time: a golden edge, brighter while the world runs backwards.
+	edge = LINE
+	if dog.outside_time:
+		edge = Color("fff0a0") if Rewind.active and fmod(_t, 0.2) < 0.1 else Color("d9a521")
 	var k := 1.0 - exp(-10.0 * delta)
 	_face = move_toward(_face, float(dog.facing), 12.0 * delta)
 	var face_sign := 1.0 if _face >= 0.0 else -1.0

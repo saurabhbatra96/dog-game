@@ -20,6 +20,9 @@ var _jump_hold := 0.0
 var _was_rescue := false
 var _acts := {}
 var _swing := 0.0
+var _phase := 0
+var _phase_t := 0.0
+var _solving := ""
 
 
 func _ready() -> void:
@@ -79,6 +82,10 @@ func _finish_level() -> void:
 ## Stands still at the start (to show idle behaviour), then runs right,
 ## jumping at gaps and walls, with a short breather every so often.
 func _drive_bot(delta: float) -> void:
+	var level_now: Level = main.get("level")
+	if level_now.rewind:
+		_solve(delta, level_now)
+		return
 	var resting := _level_t < 5.0 or fmod(_level_t, 11.0) > 8.5
 	if (_level_t > 1.5 and _level_t < 1.6) or (_level_t > 3.2 and _level_t < 3.3):
 		Input.action_press("pet_dog")
@@ -143,3 +150,94 @@ func _screenshot() -> void:
 	var image := get_viewport().get_texture().get_image()
 	image.save_png("%s/shot_%d_%02d.png" % [out_dir, _level_seen, _shots])
 	_shots += 1
+
+
+func _next_phase(note: String) -> void:
+	_phase += 1
+	_phase_t = 0.0
+	print("[autotest] SOLVE %s: %s (level t=%.1f)" % [_solving, note, _level_t])
+
+
+## Scripted solutions for the rewind levels, to prove they can be finished.
+func _solve(delta: float, level: Level) -> void:
+	if _solving != level.title:
+		_solving = level.title
+		_phase = 0
+		_phase_t = 0.0
+	_phase_t += delta
+	for action: String in ["move_right", "move_left", "rewind", "stay", "attack"]:
+		Input.action_release(action)
+	if _jump_hold > 0.0:
+		_jump_hold -= delta
+		if _jump_hold <= 0.0:
+			Input.action_release("jump")
+	var p := _player.global_position
+	var floor_ahead := _ray(p + Vector2(24.0, -4.0), p + Vector2(24.0, 40.0))
+	var jump_gaps := _player.is_on_floor() and not floor_ahead and _jump_hold <= 0.0
+
+	match level.title:
+		"Second chances":
+			# Deliberately walk into the first gap, then undo it and jump.
+			if _player.knocked_out or (_phase == 1 and _phase_t < 1.2):
+				if _phase == 0:
+					_next_phase("fell, rewinding")
+				Input.action_press("rewind")
+			else:
+				Input.action_press("move_right")
+				if jump_gaps and _phase > 0:
+					_jump(0.5)
+		"Stay":
+			var plate := get_tree().get_first_node_in_group("plates") as Plate
+			match _phase:
+				0:
+					Input.action_press("move_right")
+					if p.y > level.player_spawn.y + 100.0 and _player.is_on_floor():
+						_next_phase("dropped into the chamber")
+				1:
+					if p.x < plate.global_position.x + 30.0:
+						Input.action_press("move_right")
+					elif _dog.is_on_floor() and absf(_dog.global_position.y - p.y) < 4.0 and _phase_t > 1.5:
+						Input.action_press("stay")
+						_next_phase("told the dog to stay")
+				2:
+					if _dog.staying and plate.pressed:
+						_next_phase("dog is on the plate")
+				3:
+					Input.action_press("rewind")
+					if p.y <= level.player_spawn.y + 1.0 and p.x < 600.0:
+						_next_phase("rewound to the top, dog at %s" % _dog.global_position.round())
+				4:
+					Input.action_press("move_right")
+					if jump_gaps:
+						_jump(0.5)
+		"Hold its eye":
+			var bramble := get_tree().get_first_node_in_group("enemies") as Enemy
+			match _phase:
+				0:
+					if p.x < 560.0:
+						Input.action_press("move_right")
+					elif absf(_dog.global_position.x - p.x) < 90.0 and _phase_t > 1.0:
+						Input.action_press("stay")
+						_next_phase("told the dog to stay")
+				1:
+					Input.action_press("move_right")
+					if bramble.is_hunting() or p.x > 860.0:
+						_next_phase("bramble has seen us")
+				2:
+					if p.x > _dog.global_position.x - 50.0:
+						Input.action_press("move_left")
+					if bramble.is_distracted():
+						_next_phase("bramble is staring at the dog")
+				3:
+					var gap := bramble.global_position.x - p.x
+					if bramble.is_dead():
+						_next_phase("bramble beaten")
+					elif gap > 34.0:
+						Input.action_press("move_right")
+					else:
+						_swing -= delta
+						if _swing <= 0.0:
+							_swing = 0.36
+							Input.action_press("attack")
+				4:
+					Input.action_press("move_right")

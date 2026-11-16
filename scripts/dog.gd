@@ -86,6 +86,13 @@ var kill_y := 1.0e9
 var rescue_count := 0
 ## True while it waits at a ledge for the player to land, ready to jump after them.
 var braced := false
+## True while it has been told to stay put. Calling it releases it.
+var staying := false
+## In a rewind level the dog is outside time: it is never wound back.
+var outside_time := false
+## Whether it may bound straight to the player when it cannot find a way.
+var rescue_enabled := true
+var _stay_x := 0.0
 ## Counts down while a bark is showing.
 var bark_time := 0.0
 ## Which petting reaction is playing (PET_LEAN, PET_ROLL, PET_SPIN, PET_LICK).
@@ -151,6 +158,7 @@ var _next_glance := 2.0
 
 
 func _ready() -> void:
+	add_to_group("dog")
 	look_point = global_position + Vector2(40.0, -20.0)
 
 
@@ -169,6 +177,7 @@ func reset(to: Vector2) -> void:
 	_wait_time = 0.0
 	_far_time = 0.0
 	_called = 0.0
+	staying = false
 	_enemy = null
 	_barked = false
 	_distract_cd = randf_range(2.0, 4.0)
@@ -197,6 +206,7 @@ func forget_trail() -> void:
 func call_dog() -> void:
 	if act == Act.RESCUE:
 		return
+	staying = false
 	_called = 3.0
 	_drop_poi(3.0)
 	say("!", 0.7)
@@ -221,7 +231,7 @@ func pet() -> bool:
 
 
 func can_drag() -> bool:
-	return _drag_block <= 0.0 and not _dragging and _enemy == null and _links.is_empty() and _direct \
+	return not staying and _drag_block <= 0.0 and not _dragging and _enemy == null and _links.is_empty() and _direct \
 			and is_on_floor() and act != Act.LEAP and act != Act.RESCUE and act != Act.PETTED
 
 
@@ -236,6 +246,28 @@ func start_drag(goal_x: float) -> void:
 	_act_time = 0.0
 	say("!", 0.7)
 	perked.emit()
+
+
+## Tell the dog to stay where it is, or release it. Told to stay near a
+## pressure plate, it settles on the plate.
+func toggle_stay() -> void:
+	if staying:
+		staying = false
+		say("!", 0.6)
+		perked.emit()
+		return
+	if act == Act.RESCUE or act == Act.LEAP or _dragging or not is_on_floor():
+		return
+	staying = true
+	_stay_x = global_position.x
+	for node in get_tree().get_nodes_in_group("plates"):
+		var plate := node as Plate
+		var d := plate.global_position - global_position
+		if absf(d.x) < 110.0 and absf(d.y) < 10.0 and _walkable(global_position, plate.global_position):
+			_stay_x = plate.global_position.x
+	_enemy = null
+	_drop_poi(3.0)
+	say("...", 0.9)
 
 
 func is_walkable(from: Vector2, to: Vector2) -> bool:
@@ -262,7 +294,7 @@ func rescue_progress() -> float:
 # --- main loop --------------------------------------------------------------
 
 func _physics_process(delta: float) -> void:
-	if player == null:
+	if player == null or Rewind.active:
 		return
 	_act_time += delta
 	_called = maxf(_called - delta, 0.0)
@@ -326,6 +358,10 @@ func _track_player(delta: float) -> void:
 		if _pending != null:
 			_pending.apex = minf(_pending.apex, player.global_position.y)
 	_player_on_floor = on_floor
+
+	if staying:
+		_links.clear()
+		_pending = null
 
 	# Can the dog simply walk to the player? If so, recorded links are moot.
 	_direct_timer -= delta
@@ -409,7 +445,7 @@ func _scan_pois() -> void:
 			best = poi
 			best_dist = d
 	var busy := act == Act.LEAP or act == Act.RESCUE or not _links.is_empty() or _called > 0.0 \
-			or _enemy != null or _dragging or act == Act.PETTED
+			or _enemy != null or _dragging or act == Act.PETTED or staying
 
 	# Pick a fight to meddle in. The timing is the dog's own: a random wait
 	# after each attempt, which the player cannot hurry.
@@ -581,6 +617,9 @@ func _free_step(delta: float) -> void:
 	if not is_on_floor():
 		velocity.x = move_toward(velocity.x, 0.0, 300.0 * delta)
 		return
+	if staying:
+		_stay_step(delta)
+		return
 	if _enemy != null:
 		_distract_step(delta)
 		return
@@ -706,6 +745,28 @@ func _come_step(delta: float, dist: float) -> void:
 		hopped.emit()
 		energy = minf(energy + 0.3, 1.0)
 		_set_act(Act.STAND)
+
+
+## Sit tight. Any bramble that comes close cannot take its eyes off the dog.
+func _stay_step(delta: float) -> void:
+	if absf(_stay_x - global_position.x) > 3.0:
+		_set_act(Act.FOLLOW)
+		_drive(_stay_x, max_speed * 0.6, delta, 1.0, 9.0)
+		return
+	_set_act(Act.SIT)
+	_act_len = 999.0
+	_brake(delta)
+	var holding := false
+	for node in get_tree().get_nodes_in_group("enemies"):
+		var enemy := node as Enemy
+		var d := enemy.global_position - global_position
+		if not enemy.is_dead() and absf(d.x) < 110.0 and absf(d.y) < 40.0:
+			enemy.distract(self, 0.4)
+			holding = true
+	_bark_timer -= delta
+	if holding and _bark_timer <= 0.0:
+		_bark_timer = 0.6
+		bark_time = 0.3
 
 
 ## Run at the enemy, bark to turn its head, then dance just out of reach
@@ -888,6 +949,8 @@ func _set_act(next: Act) -> void:
 func _should_rescue(delta: float) -> bool:
 	if global_position.y > kill_y:
 		return true
+	if staying or not rescue_enabled:
+		return false
 	var far := global_position.distance_to(player.global_position) > rescue_distance
 	_far_time = _far_time + delta if far else 0.0
 	if _far_time > 0.4:

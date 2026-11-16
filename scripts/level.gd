@@ -31,6 +31,8 @@ const THEMES := {
 }
 
 var theme := "woods"
+## True for levels where time can be wound back and nothing kills you.
+var rewind := false
 var C_DIRT := Color("6b5442")
 var C_DIRT_DARK := Color("58432f")
 var C_DIRT_LIGHT := Color("7e6650")
@@ -61,6 +63,7 @@ var goals: Array[Vector2] = []
 func build(data: Dictionary) -> void:
 	title = data.get("name", "")
 	theme = data.get("theme", "woods")
+	rewind = data.get("rewind", false)
 	var look: Dictionary = THEMES.get(theme, THEMES["woods"])
 	C_DIRT = Color(look["dirt"])
 	C_DIRT_DARK = Color(look["dirt_dark"])
@@ -105,6 +108,14 @@ func build(data: Dictionary) -> void:
 					_add_poi(feet, Poi.Kind.SCARY)
 				">":
 					_add_goal(feet)
+				"=":
+					var plate := Plate.new()
+					plate.position = feet
+					add_child(plate)
+				"|":
+					var gate := Gate.new()
+					gate.position = feet
+					add_child(gate)
 				"E":
 					var enemy := Enemy.new()
 					enemy.position = feet

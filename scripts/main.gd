@@ -2,7 +2,7 @@ extends Node2D
 ## Loads the grey-box levels, wires player, dog and camera together, and draws
 ## the on-screen help and debug readout.
 
-const HELP := "Move  A/D or arrows     Jump  Space     Attack  J     Call dog  E     Pet dog  F\nRestart  R     Levels  [ ]     Dog mood  1-4 (0 auto)     Debug  Tab"
+const HELP := "Move  A/D     Jump  Space     Slash  J  (hold W up, or S down in the air)     Dash  L\nRewind  hold K     Dog: stay  S   call  E   pet  F     Restart  R     Levels  [ ]     Debug  Tab"
 
 @onready var view: SubViewportContainer = $View
 @onready var world: SubViewport = $View/World
@@ -21,6 +21,9 @@ var _show_debug := false
 var _switching := false
 var _hearts: Hearts
 var _dawdle := 0.0
+var _rewind: Rewind
+var _prompt: Label
+var _wash: ColorRect
 
 
 func _ready() -> void:
@@ -47,6 +50,11 @@ func _ready() -> void:
 	motes.camera = camera
 	world.add_child(motes)
 
+	_rewind = Rewind.new()
+	_rewind.player = player
+	_rewind.stopped.connect(dog.forget_trail)
+	add_child(_rewind)
+
 	_build_hud()
 	_load_level(0)
 	for arg in OS.get_cmdline_user_args():
@@ -58,8 +66,18 @@ func _ready() -> void:
 
 
 func _physics_process(_delta: float) -> void:
+	if Rewind.active:
+		_wash.visible = true
+		_prompt.visible = false
+		return
+	_wash.visible = false
+	_prompt.visible = player.knocked_out
+	if player.knocked_out:
+		return
 	if Input.is_action_just_pressed("call_dog"):
 		dog.call_dog()
+	if Input.is_action_just_pressed("stay") and player.is_on_floor():
+		dog.toggle_stay()
 	if Input.is_action_just_pressed("pet_dog") and player.is_on_floor() and dog.pet():
 		player.petting = 1.8
 		player.facing = 1 if dog.global_position.x >= player.global_position.x else -1
@@ -76,7 +94,10 @@ func _physics_process(_delta: float) -> void:
 		_debug.visible = _show_debug
 
 	# Fell out of the level: put the player back on the last solid ground.
-	if level != null and player.global_position.y > level.kill_y:
+	if level != null and level.rewind and player.global_position.y > level.bounds.end.y + 60.0:
+		# No deaths here: you hang where you fell until you wind time back.
+		player.knock_out()
+	elif level != null and player.global_position.y > level.kill_y:
 		player.teleport(player.last_safe_position)
 		dog.forget_trail()
 		camera.snap()
@@ -158,9 +179,15 @@ func _load_level(index: int) -> void:
 
 	player.teleport(level.player_spawn)
 	player.health = player.max_health
+	player.rewind_rules = level.rewind
+	_rewind.clear()
+	_rewind.enabled = level.rewind
+	_hearts.visible = not level.rewind
 	player.invulnerable = 0.0
 	dog.reset(level.dog_spawn)
 	dog.kill_y = level.kill_y
+	dog.outside_time = level.rewind
+	dog.rescue_enabled = not level.rewind
 	backdrop.set_level(level.player_spawn, level.theme)
 	camera.bounds = level.bounds
 	camera.snap()
@@ -188,6 +215,23 @@ func _build_hud() -> void:
 	_help.text = HELP
 	_debug = _hud_label(box, 13, 0.8)
 	_debug.visible = false
+	_wash = ColorRect.new()
+	_wash.color = Color(0.9, 0.72, 0.3, 0.16)
+	_wash.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_wash.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_wash.visible = false
+	layer.add_child(_wash)
+	_prompt = Label.new()
+	_prompt.text = "Hold K to wind time back"
+	_prompt.add_theme_font_size_override("font_size", 26)
+	_prompt.add_theme_color_override("font_color", Color("fff8e6"))
+	_prompt.add_theme_color_override("font_outline_color", Color(0.2, 0.16, 0.12))
+	_prompt.add_theme_constant_override("outline_size", 8)
+	_prompt.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	_prompt.position.y = 150.0
+	_prompt.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_prompt.visible = false
+	layer.add_child(_prompt)
 	_hearts = Hearts.new()
 	_hearts.custom_minimum_size = Vector2(160.0, 22.0)
 	box.add_child(_hearts)
