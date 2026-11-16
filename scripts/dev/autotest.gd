@@ -83,7 +83,7 @@ func _finish_level() -> void:
 ## jumping at gaps and walls, with a short breather every so often.
 func _drive_bot(delta: float) -> void:
 	var level_now: Level = main.get("level")
-	if level_now.rewind:
+	if level_now.puzzle:
 		_solve(delta, level_now)
 		return
 	var resting := _level_t < 5.0 or fmod(_level_t, 11.0) > 8.5
@@ -165,7 +165,7 @@ func _solve(delta: float, level: Level) -> void:
 		_phase = 0
 		_phase_t = 0.0
 	_phase_t += delta
-	for action: String in ["move_right", "move_left", "rewind", "stay", "attack"]:
+	for action: String in ["move_right", "move_left", "stay", "attack"]:
 		Input.action_release(action)
 	if _jump_hold > 0.0:
 		_jump_hold -= delta
@@ -175,41 +175,51 @@ func _solve(delta: float, level: Level) -> void:
 	var floor_ahead := _ray(p + Vector2(24.0, -4.0), p + Vector2(24.0, 40.0))
 	var jump_gaps := _player.is_on_floor() and not floor_ahead and _jump_hold <= 0.0
 
+	var plate := get_tree().get_first_node_in_group("plates") as Plate
+	for action: String in ["fetch", "feed"]:
+		Input.action_release(action)
 	match level.title:
-		"Second chances":
-			# Deliberately walk into the first gap, then undo it and jump.
-			if _player.knocked_out or (_phase == 1 and _phase_t < 1.2):
-				if _phase == 0:
-					_next_phase("fell, rewinding")
-				Input.action_press("rewind")
-			else:
-				Input.action_press("move_right")
-				if jump_gaps and _phase > 0:
-					_jump(0.5)
-		"Stay":
-			var plate := get_tree().get_first_node_in_group("plates") as Plate
+		"Sit. Stay.", "Temptation":
 			match _phase:
 				0:
-					Input.action_press("move_right")
-					if p.y > level.player_spawn.y + 100.0 and _player.is_on_floor():
-						_next_phase("dropped into the chamber")
-				1:
-					if p.x < plate.global_position.x + 30.0:
+					# Collect the treat on the way, stop just past the plate.
+					if level.title == "Temptation" and _player.treats > 0:
+						# Feed the hungry dog before going anywhere near the sandwich.
+						if absf(_dog.global_position.x - p.x) < 75.0 and fmod(_phase_t, 0.4) < 0.05:
+							Input.action_press("feed")
+					elif p.x < plate.global_position.x + 30.0:
 						Input.action_press("move_right")
-					elif _dog.is_on_floor() and absf(_dog.global_position.y - p.y) < 4.0 and _phase_t > 1.5:
+					elif absf(_dog.global_position.x - p.x) < 100.0 and _phase_t > 1.2:
+						_next_phase("at the plate, hunger %d%%" % roundi(_dog.hunger * 100.0))
+				1:
+					if _phase_t > 0.5:
 						Input.action_press("stay")
 						_next_phase("told the dog to stay")
 				2:
-					if _dog.staying and plate.pressed:
-						_next_phase("dog is on the plate")
+					if _dog.staying and plate.pressed and _phase_t > 1.0:
+						_next_phase("dog is holding the plate")
+					elif _phase_t > 6.0:
+						_next_phase("FAILED: plate not held, dog act %s" % Dog.Act.keys()[_dog.act])
 				3:
-					Input.action_press("rewind")
-					if p.y <= level.player_spawn.y + 1.0 and p.x < 600.0:
-						_next_phase("rewound to the top, dog at %s" % _dog.global_position.round())
-				4:
 					Input.action_press("move_right")
 					if jump_gaps:
 						_jump(0.5)
+		"Fetch":
+			match _phase:
+				0:
+					if p.x < 660.0:
+						Input.action_press("move_right")
+					elif _phase_t > 1.5:
+						Input.action_press("fetch")
+						_next_phase("sent the dog to fetch")
+				1:
+					for node in get_tree().get_nodes_in_group("items"):
+						if (node as Item).carried_by == _player:
+							_next_phase("dog brought the key")
+					if _phase_t > 8.0:
+						_next_phase("FAILED: no key, dog act %s" % Dog.Act.keys()[_dog.act])
+				2:
+					Input.action_press("move_left")
 		"Hold its eye":
 			var bramble := get_tree().get_first_node_in_group("enemies") as Enemy
 			match _phase:

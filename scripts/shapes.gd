@@ -3,7 +3,7 @@ class_name Shapes
 ## Call these only from inside a CanvasItem's _draw().
 
 ## Edge smoothing for all placeholder art. Off gives the hard, pixel-style edge.
-const AA := false
+const AA := true
 
 
 static func rrect(ci: CanvasItem, rect: Rect2, radius: float, color: Color) -> void:

@@ -30,7 +30,7 @@ var _joy := 0.0
 
 
 func _ready() -> void:
-	grow = 1.3
+	grow = 1.6
 	player.jumped.connect(_on_jumped)
 	player.landed.connect(_on_landed)
 	player.hurt.connect(_on_hurt)
@@ -49,7 +49,7 @@ func _on_hurt() -> void:
 
 
 func mood() -> Mood:
-	if player.knocked_out or player.invulnerable > player.hurt_safety - 0.55:
+	if player.invulnerable > player.hurt_safety - 0.55:
 		return Mood.HURT
 	if player.dragged:
 		return Mood.SURPRISED

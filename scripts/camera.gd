@@ -11,7 +11,7 @@ extends Node
 ## World pixels visible from top to bottom.
 @export var view_height := 480.0
 ## World pixels per drawn pixel. 1 is fine-grained, 2 is very chunky.
-@export var pixel_size := 4.0 / 3.0
+@export var pixel_size := 0.5
 
 @export_group("Follow")
 ## How far the view shifts in the direction the player is running.

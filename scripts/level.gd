@@ -23,6 +23,11 @@ const THEMES := {
 		"top": "a3a29b", "top_dark": "7c7b75", "tufts": false, "flowers": 0.0,
 		"drift": ["f29bb8"],
 	},
+	"gloam": {
+		"dirt": "17232e", "dirt_dark": "101a23", "dirt_light": "22323f",
+		"top": "7fb0b4", "top_dark": "3f6f78", "tufts": true, "flowers": 0.0,
+		"drift": ["a98bd8"],
+	},
 	"night": {
 		"dirt": "222a40", "dirt_dark": "181f31", "dirt_light": "2e3853",
 		"top": "46526f", "top_dark": "313b55", "tufts": false, "flowers": 0.0,
@@ -31,8 +36,10 @@ const THEMES := {
 }
 
 var theme := "woods"
-## True for levels where time can be wound back and nothing kills you.
-var rewind := false
+## True for puzzle rooms: a fall restarts the room, and the dog cannot cheat by bounding to you.
+var puzzle := false
+## Hunger the dog starts the room with, or -1 to carry it over.
+var start_hunger := -1.0
 var C_DIRT := Color("6b5442")
 var C_DIRT_DARK := Color("58432f")
 var C_DIRT_LIGHT := Color("7e6650")
@@ -63,7 +70,8 @@ var goals: Array[Vector2] = []
 func build(data: Dictionary) -> void:
 	title = data.get("name", "")
 	theme = data.get("theme", "woods")
-	rewind = data.get("rewind", false)
+	puzzle = data.get("puzzle", false)
+	start_hunger = data.get("hunger", -1.0)
 	var look: Dictionary = THEMES.get(theme, THEMES["woods"])
 	C_DIRT = Color(look["dirt"])
 	C_DIRT_DARK = Color(look["dirt_dark"])
@@ -112,10 +120,17 @@ func build(data: Dictionary) -> void:
 					var plate := Plate.new()
 					plate.position = feet
 					add_child(plate)
-				"|":
+				"|", "&":
 					var gate := Gate.new()
+					gate.needs_key = ch == "&"
 					gate.position = feet
 					add_child(gate)
+				"*":
+					_add_prop(Treat.new(), feet)
+				"%":
+					_add_prop(Lure.new(), feet)
+				"$":
+					_add_prop(Item.new(), feet)
 				"E":
 					var enemy := Enemy.new()
 					enemy.position = feet
@@ -175,6 +190,11 @@ func _build_collision() -> void:
 		collider.shape = shape
 		collider.position = rect.get_center()
 		body.add_child(collider)
+
+
+func _add_prop(prop: Node2D, feet: Vector2) -> void:
+	prop.position = feet
+	add_child(prop)
 
 
 func _add_poi(feet: Vector2, kind: Poi.Kind) -> void:

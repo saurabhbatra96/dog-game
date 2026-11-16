@@ -2,7 +2,7 @@ extends Node2D
 ## Loads the grey-box levels, wires player, dog and camera together, and draws
 ## the on-screen help and debug readout.
 
-const HELP := "Move  A/D     Jump  Space     Slash  J  (hold W up, or S down in the air)     Dash  L\nRewind  hold K     Dog: stay  S   call  E   pet  F     Restart  R     Levels  [ ]     Debug  Tab"
+const HELP := "Move  A/D     Jump  Space     Slash  J  (hold W up, or S down in the air)     Dash  L\nDog:  stay  S    fetch  G    call  E    pet  F    treat  T          Restart  R     Levels  [ ]     Debug  Tab"
 
 @onready var view: SubViewportContainer = $View
 @onready var world: SubViewport = $View/World
@@ -21,17 +21,14 @@ var _show_debug := false
 var _switching := false
 var _hearts: Hearts
 var _dawdle := 0.0
-var _rewind: Rewind
-var _prompt: Label
-var _wash: ColorRect
+var _dog_status: Label
+var _vignette: TextureRect
 
 
 func _ready() -> void:
-	# The world is drawn small and scaled up with hard pixels (see camera.gd).
+	# The world is drawn into its own viewport at full detail (see camera.gd).
 	view.stretch = false
-	view.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-	world.snap_2d_transforms_to_pixel = true
-	world.canvas_item_default_texture_filter = Viewport.DEFAULT_CANVAS_ITEM_TEXTURE_FILTER_NEAREST
+	view.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
 	world.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 
 	dog.player = player
@@ -50,11 +47,6 @@ func _ready() -> void:
 	motes.camera = camera
 	world.add_child(motes)
 
-	_rewind = Rewind.new()
-	_rewind.player = player
-	_rewind.stopped.connect(dog.forget_trail)
-	add_child(_rewind)
-
 	_build_hud()
 	_load_level(0)
 	for arg in OS.get_cmdline_user_args():
@@ -66,14 +58,16 @@ func _ready() -> void:
 
 
 func _physics_process(_delta: float) -> void:
-	if Rewind.active:
-		_wash.visible = true
-		_prompt.visible = false
-		return
-	_wash.visible = false
-	_prompt.visible = player.knocked_out
-	if player.knocked_out:
-		return
+	if Input.is_action_just_pressed("fetch"):
+		dog.fetch()
+	if Input.is_action_just_pressed("feed") and player.treats > 0 \
+			and player.global_position.distance_to(dog.global_position) < 80.0:
+		player.treats -= 1
+		player.petting = 1.2
+		player.facing = 1 if dog.global_position.x >= player.global_position.x else -1
+		dog.feed()
+	_dog_status.text = "Treats %d     Hunger %d%%     Stay Lv %d     Fetch Lv %d" % [
+		player.treats, roundi(dog.hunger * 100.0), dog.skill_level("stay"), dog.skill_level("fetch")]
 	if Input.is_action_just_pressed("call_dog"):
 		dog.call_dog()
 	if Input.is_action_just_pressed("stay") and player.is_on_floor():
@@ -94,9 +88,9 @@ func _physics_process(_delta: float) -> void:
 		_debug.visible = _show_debug
 
 	# Fell out of the level: put the player back on the last solid ground.
-	if level != null and level.rewind and player.global_position.y > level.bounds.end.y + 60.0:
-		# No deaths here: you hang where you fell until you wind time back.
-		player.knock_out()
+	if level != null and level.puzzle and player.global_position.y > level.bounds.end.y + 60.0:
+		# Puzzle rooms are short: a fall just starts the room again.
+		go_to_level(level_index)
 	elif level != null and player.global_position.y > level.kill_y:
 		player.teleport(player.last_safe_position)
 		dog.forget_trail()
@@ -179,20 +173,21 @@ func _load_level(index: int) -> void:
 
 	player.teleport(level.player_spawn)
 	player.health = player.max_health
-	player.rewind_rules = level.rewind
-	_rewind.clear()
-	_rewind.enabled = level.rewind
-	_hearts.visible = not level.rewind
+	player.treats = 0
+	if level.start_hunger >= 0.0:
+		dog.hunger = level.start_hunger
 	player.invulnerable = 0.0
 	dog.reset(level.dog_spawn)
 	dog.kill_y = level.kill_y
-	dog.outside_time = level.rewind
-	dog.rescue_enabled = not level.rewind
+	dog.rescue_enabled = not level.puzzle
 	backdrop.set_level(level.player_spawn, level.theme)
 	camera.bounds = level.bounds
 	camera.snap()
 	# Light text over the night sky, dark text otherwise.
-	var ink := Color(0.94, 0.95, 1.0) if level.theme == "night" else Color(0.17, 0.15, 0.13)
+	var dark := level.theme == "night" or level.theme == "gloam"
+	var ink := Color(0.94, 0.95, 1.0) if dark else Color(0.17, 0.15, 0.13)
+	_vignette.visible = level.theme == "gloam"
+	_dog_status.add_theme_color_override("font_color", Color(ink, 0.9))
 	_title.add_theme_color_override("font_color", Color(ink, 0.9))
 	_help.add_theme_color_override("font_color", Color(ink, 0.6))
 	_debug.add_theme_color_override("font_color", Color(ink, 0.85))
@@ -215,23 +210,24 @@ func _build_hud() -> void:
 	_help.text = HELP
 	_debug = _hud_label(box, 13, 0.8)
 	_debug.visible = false
-	_wash = ColorRect.new()
-	_wash.color = Color(0.9, 0.72, 0.3, 0.16)
-	_wash.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_wash.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_wash.visible = false
-	layer.add_child(_wash)
-	_prompt = Label.new()
-	_prompt.text = "Hold K to wind time back"
-	_prompt.add_theme_font_size_override("font_size", 26)
-	_prompt.add_theme_color_override("font_color", Color("fff8e6"))
-	_prompt.add_theme_color_override("font_outline_color", Color(0.2, 0.16, 0.12))
-	_prompt.add_theme_constant_override("outline_size", 8)
-	_prompt.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	_prompt.position.y = 150.0
-	_prompt.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	_prompt.visible = false
-	layer.add_child(_prompt)
+	_dog_status = _hud_label(box, 14, 0.85)
+	# A soft dark edge around the screen.
+	var falloff := Gradient.new()
+	falloff.set_color(0, Color(0.02, 0.04, 0.07, 0.0))
+	falloff.set_color(1, Color(0.02, 0.04, 0.07, 0.7))
+	falloff.set_offset(0, 0.55)
+	var shade := GradientTexture2D.new()
+	shade.gradient = falloff
+	shade.fill = GradientTexture2D.FILL_RADIAL
+	shade.fill_from = Vector2(0.5, 0.5)
+	shade.fill_to = Vector2(1.05, 0.5)
+	_vignette = TextureRect.new()
+	_vignette.texture = shade
+	_vignette.stretch_mode = TextureRect.STRETCH_SCALE
+	_vignette.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_vignette.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(_vignette)
+	layer.move_child(_vignette, 0)
 	_hearts = Hearts.new()
 	_hearts.custom_minimum_size = Vector2(160.0, 22.0)
 	box.add_child(_hearts)

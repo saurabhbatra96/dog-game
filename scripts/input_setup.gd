@@ -13,12 +13,13 @@ func _enter_tree() -> void:
 	_action("call_dog", [KEY_E], [JOY_BUTTON_X])
 	_action("pet_dog", [KEY_F], [JOY_BUTTON_Y])
 	_action("attack", [KEY_J, KEY_X], [JOY_BUTTON_B])
-	_action("rewind", [KEY_K, KEY_SHIFT], [JOY_BUTTON_RIGHT_STICK])
+	_action("feed", [KEY_T], [JOY_BUTTON_LEFT_SHOULDER])
+	_action("fetch", [KEY_G], [JOY_BUTTON_RIGHT_STICK])
 	_action("stay", [KEY_S, KEY_DOWN], [JOY_BUTTON_DPAD_DOWN])
 	_action("restart", [KEY_R], [])
 	_action("next_level", [KEY_BRACKETRIGHT, KEY_N], [])
 	_action("prev_level", [KEY_BRACKETLEFT, KEY_B], [])
-	_action("toggle_debug", [KEY_TAB, KEY_Q], [])
+	_action("toggle_debug", [KEY_TAB], [])
 
 
 func _action(action: StringName, keys: Array, buttons: Array, axis: int = -1, axis_value: float = 0.0) -> void:

@@ -143,6 +143,17 @@ func _apply(level_theme: String) -> void:
 			for woods: Woods in [_far, _mid, _near]:
 				woods.night = true
 			_rays.visible = false
+		"gloam":
+			# A hushed, misty hollow: pale light, dark trunks, things that glow.
+			horizon = Color("6c93a0")
+			_sky.dress(Color("16222f"), horizon, false, Color("3c5666"))
+			_far.setup(46.0, 190.0, 0.0, Color("5f8696"), Color("557b8b"), Color("557b8b"), Color("557b8b"))
+			_far.pine_share = 1.0
+			_mid.setup(110.0, 250.0, 0.25, Color("3a5d6d"), Color("2f4f5e"), Color("26414f"), Color("2f4f5e"))
+			_mid.pine_share = 0.7
+			_mid.props = Woods.GLOWCAPS
+			_near.setup(170.0, 330.0, 0.5, Color("1f3442"), Color("182b38"), Color("12212b"), Color("182b38"))
+			_near.pine_share = 0.4
 		_:
 			# Morning woods, with mountains and a castle beyond.
 			_sky.dress(Color("b9dbe4"), horizon, false)
@@ -153,7 +164,12 @@ func _apply(level_theme: String) -> void:
 			_mid.scenes = [Woods.LAKE, Woods.RUINS, Woods.COTTAGE, Woods.FOREST]
 			_near.setup(150.0, 290.0, 0.5, Color("568c69"), Color("467a5b"), Color("5a4b3f"), Color("467a5b"))
 	for layer in _layers:
-		layer.mist = Color(horizon, (0.14 if theme == "night" else 0.32) * (1.0 - layer.factor))
+		var fog := 0.32
+		if theme == "night":
+			fog = 0.14
+		elif theme == "gloam":
+			fog = 0.5
+		layer.mist = Color(horizon, fog * (1.0 - layer.factor))
 		layer.force_redraw()
 
 
@@ -191,14 +207,16 @@ class SkyBands extends Node2D:
 	var top := Color("b9dbe4")
 	var bottom := Color("f6edcf")
 	var night := false
+	var cloud_tint := Color("f8faf4")
 	var _size := Vector2(642.0, 362.0)
 	var _cam_x := 0.0
 	var _t := 0.0
 
-	func dress(p_top: Color, p_bottom: Color, p_night: bool) -> void:
+	func dress(p_top: Color, p_bottom: Color, p_night: bool, p_cloud: Color = Color("f8faf4")) -> void:
 		top = p_top
 		bottom = p_bottom
 		night = p_night
+		cloud_tint = p_cloud
 
 	func update(size: Vector2, cam_x: float, t: float) -> void:
 		_size = size
@@ -228,8 +246,8 @@ class SkyBands extends Node2D:
 			draw_circle(sun, _size.y * 0.095, Backdrop.SUN)
 
 		# Clouds drift on the wind and barely react to the camera.
-		var cloud := Color("1c2947") if night else Color("f8faf4")
-		var cloud_shade := Color("162038") if night else top.lerp(Color.WHITE, 0.55)
+		var cloud := Color("1c2947") if night else cloud_tint
+		var cloud_shade := Color("162038") if night else top.lerp(cloud_tint, 0.55)
 		var span := _size.x + 260.0
 		for k in 6:
 			var speed := 2.0 + Backdrop.rand(k, 62) * 3.0
@@ -327,7 +345,7 @@ class Mountains extends Layer:
 ## Trees, plus whatever landmark, scenes and props this row is given.
 class Woods extends Layer:
 	enum { NO_LANDMARK, CASTLE, SPIRE, TOWER, SKYLINE }
-	enum { NO_PROPS, LAMPS, GRASS }
+	enum { NO_PROPS, LAMPS, GRASS, GLOWCAPS }
 	enum { FOREST, LAKE, COTTAGE, RUINS, DEAD_OAK, DEER, GUARDS, STREET, KIRKYARD, RIVER }
 	## Scenes repeat along the row, one per ZONE of width.
 	const ZONE := 620.0
@@ -474,6 +492,8 @@ class Woods extends Layer:
 				_tall_grass()
 			LAMPS:
 				_lamps()
+			GLOWCAPS:
+				_glowcaps()
 
 	# --- trees ---
 
@@ -792,6 +812,27 @@ class Woods extends Layer:
 				draw_rect(Rect2(x - 16.0 + k * 7.4, foot - 40.0 - (k % 2) * 3.0, 2.7, 40.0 + (k % 2) * 3.0), WOOD if k % 2 == 0 else WOOD_DARK)
 			draw_rect(Rect2(x - 17.0, foot - 32.0, 35.0, 2.7), WOOD)
 			draw_rect(Rect2(x - 17.0, foot - 12.0, 35.0, 2.7), WOOD_DARK)
+
+	## Pale mushrooms and hanging lantern-flowers that light the mist.
+	func _glowcaps() -> void:
+		const GLOW := Color("9ff2e6")
+		for i in range(floori(x0 / 70.0) - 1, ceili(x1 / 70.0) + 2):
+			var x := i * 70.0 + Backdrop.rand(i, 151) * 50.0
+			var pulse := 0.5 + 0.5 * sin(t * 1.3 + i * 1.7)
+			if Backdrop.rand(i, 152) < 0.55:
+				var h := 8.0 + 16.0 * Backdrop.rand(i, 153)
+				draw_circle(Vector2(x, base_y - h), 16.0 + pulse * 5.0, Color(GLOW, 0.07 + 0.05 * pulse))
+				draw_rect(Rect2(x - 1.0, base_y - h, 2.0, h + 2.0), Color("cfe9e6"))
+				draw_circle(Vector2(x, base_y - h), 5.0, Color(GLOW, 0.7 + 0.3 * pulse))
+				draw_rect(Rect2(x - 5.0, base_y - h, 10.0, 5.0), floor_color)
+			else:
+				# A lantern-flower hanging from a thread.
+				var drop := 90.0 + 80.0 * Backdrop.rand(i, 154)
+				var sway := sin(t * 0.8 + i) * 4.0
+				var bulb := Vector2(x + sway, base_y - drop)
+				draw_line(Vector2(x, base_y - drop - 160.0), bulb, Color(trunk, 0.9), 1.2)
+				draw_circle(bulb, 13.0 + pulse * 4.0, Color(GLOW, 0.08 + 0.05 * pulse))
+				draw_circle(bulb, 3.2, Color(GLOW, 0.85))
 
 	func _tall_grass() -> void:
 		var step := 5.0

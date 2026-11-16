@@ -80,10 +80,8 @@ var dragged := false
 var drag_target_x := 0.0
 ## Whoever has the other end of the tie.
 var tie_holder: Node2D
-## In a rewind level nothing kills you: a fall or a hit leaves you knocked out
-## until you wind time back.
-var rewind_rules := false
-var knocked_out := false
+## Treats in the pouch, for feeding and training the dog.
+var treats := 0
 
 var _coyote := 0.0
 var _buffer := 0.0
@@ -110,8 +108,6 @@ func jump_speed() -> float:
 
 
 func _physics_process(delta: float) -> void:
-	if Rewind.active or knocked_out:
-		return
 	var on_floor := is_on_floor()
 	attack_time = maxf(attack_time - delta, 0.0)
 	invulnerable = maxf(invulnerable - delta, 0.0)
@@ -258,10 +254,7 @@ func _hit_stop() -> void:
 
 
 func take_hit(damage: int, from_x: float) -> void:
-	if invulnerable > 0.0 or health <= 0 or knocked_out:
-		return
-	if rewind_rules:
-		knock_out()
+	if invulnerable > 0.0 or health <= 0:
 		return
 	health -= damage
 	invulnerable = hurt_safety
@@ -273,26 +266,6 @@ func take_hit(damage: int, from_x: float) -> void:
 	hurt.emit()
 	if health <= 0:
 		died.emit()
-
-
-func knock_out() -> void:
-	knocked_out = true
-	dragged = false
-	petting = 0.0
-	velocity = Vector2.ZERO
-	hurt.emit()
-
-
-func save_state() -> Array:
-	return [global_position, velocity, facing]
-
-
-func load_state(saved: Array) -> void:
-	global_position = saved[0]
-	velocity = saved[1]
-	facing = saved[2]
-	knocked_out = false
-	dragged = false
 
 
 ## If the head is about to clip the corner of a block, slide sideways past it
@@ -320,6 +293,5 @@ func teleport(to: Vector2) -> void:
 	_floor_time = 0.0
 	dragged = false
 	petting = 0.0
-	knocked_out = false
 	reset_physics_interpolation()
 	respawned.emit()

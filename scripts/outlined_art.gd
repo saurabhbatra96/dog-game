@@ -5,9 +5,9 @@ extends Node2D
 ## colour, then again normally on top. The result is a clean dark edge around
 ## the whole silhouette, which keeps a white dog readable on a pale backdrop.
 
-const LINE := Color("4f443c")
+const LINE := Color("1d1a22")
 ## How far the dark edge extends past each shape, before the node's own scale.
-var grow := 1.4
+var grow := 1.7
 
 ## Colour of the dark edge.
 var edge := LINE
