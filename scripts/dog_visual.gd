@@ -230,6 +230,12 @@ func _draw() -> void:
 		for r: float in [6.0, 11.0]:
 			draw_arc(head + Vector2(12.0, 2.0), r + (1.0 - loud) * 7.0, -0.8, 0.8, 7, Color(LINE, loud), 1.8, Shapes.AA)
 
+	# How much of the stay is left, as a ring that runs down.
+	if dog.staying and dog.act == Dog.Act.SIT and dog.stay_total < 1000.0:
+		draw_set_transform_matrix(Transform2D.IDENTITY)
+		var left := clampf(dog.stay_left / dog.stay_total, 0.0, 1.0)
+		draw_arc(Vector2(0.0, -40.0), 6.0, -PI * 0.5, -PI * 0.5 + TAU * left, 24, Color("fff0b0") if left > 0.3 else Color("ff7a6a"), 2.4, true)
+
 	# Thought bubble, unflipped.
 	draw_set_transform_matrix(Transform2D.IDENTITY)
 	if _emote_shown != "":

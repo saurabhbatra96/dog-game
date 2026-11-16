@@ -38,8 +38,10 @@ const THEMES := {
 var theme := "woods"
 ## True for puzzle rooms: a fall restarts the room, and the dog cannot cheat by bounding to you.
 var puzzle := false
-## Hunger the dog starts the room with, or -1 to carry it over.
-var start_hunger := -1.0
+## Pips of hunger the dog starts the room with.
+var start_pips := 1
+## Skill levels the dog starts this room with, e.g. {"stay": 2}.
+var skills := {}
 var C_DIRT := Color("6b5442")
 var C_DIRT_DARK := Color("58432f")
 var C_DIRT_LIGHT := Color("7e6650")
@@ -71,7 +73,8 @@ func build(data: Dictionary) -> void:
 	title = data.get("name", "")
 	theme = data.get("theme", "woods")
 	puzzle = data.get("puzzle", false)
-	start_hunger = data.get("hunger", -1.0)
+	start_pips = int(data.get("hunger", 1))
+	skills = data.get("skills", {})
 	var look: Dictionary = THEMES.get(theme, THEMES["woods"])
 	C_DIRT = Color(look["dirt"])
 	C_DIRT_DARK = Color(look["dirt_dark"])
@@ -116,13 +119,26 @@ func build(data: Dictionary) -> void:
 					_add_poi(feet, Poi.Kind.SCARY)
 				">":
 					_add_goal(feet)
-				"=":
+				"=", "-", "_":
 					var plate := Plate.new()
+					plate.channel = "A" if ch == "=" else "B"
+					plate.heavy = ch == "_"
 					plate.position = feet
 					add_child(plate)
-				"|", "&":
+				"~":
+					_add_prop(Plank.new(), Vector2(x * TILE, y * TILE))
+				"+":
+					var sandwich := Treat.new()
+					sandwich.bait = true
+					_add_prop(sandwich, feet)
+				"S":
+					_add_prop(Squirrel.new(), feet)
+				"^":
+					_add_prop(Mat.new(), feet)
+				"|", "&", ":":
 					var gate := Gate.new()
 					gate.needs_key = ch == "&"
+					gate.channel = "B" if ch == ":" else "A"
 					gate.position = feet
 					add_child(gate)
 				"*":
@@ -133,6 +149,8 @@ func build(data: Dictionary) -> void:
 					_add_prop(Item.new(), feet)
 				"E":
 					var enemy := Enemy.new()
+					enemy.leash = float(data.get("leash", 440.0))
+					enemy.patrol_range = float(data.get("patrol", 96.0))
 					enemy.position = feet
 					add_child(enemy)
 				_:

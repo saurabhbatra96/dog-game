@@ -1,28 +1,35 @@
 extends Node
-## Development harness, not part of the game. Plays each level with a simple
-## bot, logs how the dog copes, and saves screenshots.
+## Development harness, not part of the game.
 ##   godot --path . -- --autotest=/some/output/folder
+##
+## Runs every case in PuzzleCases: a scripted bot plays a puzzle room, either
+## to prove it can be finished or to prove that a tempting mistake fails.
+## Then it runs through the scenery levels to check nothing errors.
+## Results are printed as PASS or FAIL lines, and screenshots are saved.
 
-const LEVEL_SECONDS := 24.0
+const SCENERY_SECONDS := 6.0
 
 var main: Node
 var out_dir := ""
 
 var _player: Player
 var _dog: Dog
-var _level_t := 0.0
-var _level_seen := -1
-var _levels_done := 0
-var _log_t := 0.0
+var _case := -1
+var _steps: Array = []
+var _step := 0
+var _step_t := 0.0
+var _case_t := 0.0
+var _ready_t := 0.0
+var _done_at := -1
+var _start_y := 0.0
+var _jump_hold := 0.0
 var _shot_t := 0.0
 var _shots := 0
-var _jump_hold := 0.0
-var _was_rescue := false
-var _acts := {}
-var _swing := 0.0
-var _phase := 0
-var _phase_t := 0.0
-var _solving := ""
+var _passed := 0
+var _failed := 0
+var _scenery := -1
+var _scenery_t := 0.0
+var _only := ""
 
 
 func _ready() -> void:
@@ -35,109 +42,269 @@ func _ready() -> void:
 	get_window().set_flag(Window.FLAG_NO_FOCUS, true)
 	_player = main.get("player")
 	_dog = main.get("dog")
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--only="):
+			_only = arg.get_slice("=", 1)
+	_next_case()
+
+
+func _level() -> Level:
+	return main.get("level")
+
+
+func _index_of(room: String) -> int:
+	for i in LevelMaps.LEVELS.size():
+		if LevelMaps.LEVELS[i]["name"] == room:
+			return i
+	return -1
+
+
+func _next_case() -> void:
+	_release_all()
+	_case += 1
+	# --only=text runs just the rooms whose name contains the text.
+	while _only != "" and _case < PuzzleCases.CASES.size() and not String(PuzzleCases.CASES[_case]["room"]).contains(_only):
+		_case += 1
+	if _case >= PuzzleCases.CASES.size() and _only != "":
+		_report("DONE  %d passed, %d failed" % [_passed, _failed])
+		get_tree().quit()
+		return
+	if _case >= PuzzleCases.CASES.size():
+		_scenery = PuzzleCases.CASES.size()  # scenery levels follow the puzzle rooms
+		_scenery_t = 0.0
+		main.call("go_to_level", _first_scenery())
+		return
+	var case: Dictionary = PuzzleCases.CASES[_case]
+	_steps = case["steps"]
+	_step = 0
+	_step_t = 0.0
+	_case_t = 0.0
+	_ready_t = 0.0
+	_done_at = int(main.get("completed"))
+	main.call("go_to_level", _index_of(case["room"]))
+
+
+func _first_scenery() -> int:
+	for i in LevelMaps.LEVELS.size():
+		if not LevelMaps.LEVELS[i].get("puzzle", false):
+			return i
+	return 0
+
+
+func _release_all() -> void:
+	for action: String in ["move_right", "move_left", "jump", "stay", "fetch", "feed", "throw", "call_dog", "pet_dog"]:
+		_release(action)
+	_jump_hold = 0.0
+
+
+func _finish(passed: bool, note: String) -> void:
+	var case: Dictionary = PuzzleCases.CASES[_case]
+	_report("%s  %s: %s (%s) %s" % ["PASS" if passed else "FAIL", case["room"], case["what"], case["expect"], note])
+	if passed:
+		_passed += 1
+	else:
+		_failed += 1
+	_next_case()
 
 
 func _physics_process(delta: float) -> void:
-	var index: int = main.get("level_index")
-	if index != _level_seen:
-		if _level_seen >= 0:
-			_finish_level()
-		_level_seen = index
-		_level_t = 0.0
-		_acts = {}
-	_level_t += delta
-	_acts[Dog.Act.keys()[_dog.act]] = true
-
-	var rescue := _dog.act == Dog.Act.RESCUE
-	if rescue and not _was_rescue:
-		print("[autotest] RESCUE  level=%d t=%.1f dog=%s player=%s" % [index, _level_t, _dog.global_position.round(), _player.global_position.round()])
-	_was_rescue = rescue
-
-	_drive_bot(delta)
-
-	_log_t -= delta
-	if _log_t <= 0.0:
-		_log_t = 1.0
-		print("[autotest] level=%d t=%4.1f player=%s dog=%s act=%s mood=%s links=%d hp=%d" % [
-			index, _level_t, _player.global_position.round(), _dog.global_position.round(),
-			Dog.Act.keys()[_dog.act], Dog.Mood.keys()[_dog.mood], _dog.link_count(), _player.health])
 	_shot_t -= delta
 	if _shot_t <= 0.0 and out_dir != "":
-		_shot_t = 1.7
+		_shot_t = 1.5
 		_screenshot()
-
-	if _level_t > LEVEL_SECONDS:
-		main.call("go_to_level", index + 1)
-
-
-func _finish_level() -> void:
-	print("[autotest] level %d done: rescues so far=%d acts seen=%s" % [_level_seen, _dog.rescue_count, ", ".join(_acts.keys())])
-	_levels_done += 1
-	if _levels_done >= LevelMaps.LEVELS.size():
-		Input.action_release("move_right")
-		Input.action_release("jump")
-		get_tree().quit()
-
-
-## Stands still at the start (to show idle behaviour), then runs right,
-## jumping at gaps and walls, with a short breather every so often.
-func _drive_bot(delta: float) -> void:
-	var level_now: Level = main.get("level")
-	if level_now.puzzle:
-		_solve(delta, level_now)
+	if _case >= PuzzleCases.CASES.size():
+		_run_scenery(delta)
 		return
-	var resting := _level_t < 5.0 or fmod(_level_t, 11.0) > 8.5
-	if (_level_t > 1.5 and _level_t < 1.6) or (_level_t > 3.2 and _level_t < 3.3):
-		Input.action_press("pet_dog")
-	else:
-		Input.action_release("pet_dog")
+
+	var case: Dictionary = PuzzleCases.CASES[_case]
+	var level := _level()
+	var expect: String = case["expect"]
+	# Finishing a room loads the next one, so check for that before anything
+	# that depends on still being in the room.
+	var finished := _ready_t >= 0.4 and int(main.get("completed")) > _done_at
+	if finished:
+		_release_all()
+		if expect == "finish":
+			_finish(true, "in %.1f s" % _case_t)
+		else:
+			_finish(false, "the mistake finished the room")
+		return
+	# Wait for the room to load and settle.
+	if level == null or level.title != case["room"] or main.get("_switching"):
+		return
+	_ready_t += delta
+	if _ready_t < 0.4:
+		_start_y = _player.global_position.y
+		_done_at = int(main.get("completed"))
+		return
+	_case_t += delta
+	var trapped := _dog.global_position.y > _start_y + 60.0 and _dog.is_on_floor()
+	if expect == "dog_trapped" and trapped:
+		_finish(true, "dog ended up in the pit")
+		return
+
+	_release_all_but_jump()
 	if _jump_hold > 0.0:
 		_jump_hold -= delta
 		if _jump_hold <= 0.0:
 			Input.action_release("jump")
-	# Dawdle just short of the flag, to let the dog tow us over the line.
-	var level: Level = main.get("level")
-	for goal in level.goals:
-		var gap := goal.x - _player.global_position.x
-		if gap > 60.0 and gap < 180.0 and absf(goal.y - _player.global_position.y) < 8.0:
-			resting = true
-	if resting and _player.is_on_floor():
-		Input.action_release("move_right")
+
+	if _step >= _steps.size():
+		# Out of steps: give the room a moment to register the result.
+		if _step_t > 2.5:
+			if expect == "stuck":
+				_finish(true, "no way through")
+			else:
+				_finish(false, "ran out of steps; dog %s at %s, player at %s" % [
+					Dog.Act.keys()[_dog.act], _dog.global_position.round(), _player.global_position.round()])
+		_step_t += delta
 		return
-	# Stand and swing at any enemy just ahead.
-	_swing -= delta
-	Input.action_release("attack")
-	for node in get_tree().get_nodes_in_group("enemies"):
-		var enemy := node as Enemy
-		var d := enemy.global_position - _player.global_position
-		if not enemy.is_dead() and d.x > -20.0 and d.x < 60.0 and absf(d.y) < 40.0:
-			Input.action_release("move_right")
-			if _swing <= 0.0 and d.x < 40.0:
-				_swing = 0.36
-				Input.action_press("attack")
-			return
+
+	_step_t += delta
+	var limit := 14.0 if expect == "finish" else 6.0
+	if _step_t > limit:
+		if expect == "stuck":
+			_finish(true, "blocked at step %d %s" % [_step, str(_steps[_step])])
+		else:
+			_finish(false, "step %d %s timed out; dog %s at %s pips %d, player at %s" % [
+				_step, str(_steps[_step]), Dog.Act.keys()[_dog.act], _dog.global_position.round(), _dog.pips,
+				_player.global_position.round()])
+		return
+	_do_step(_steps[_step], level)
+
+
+## Releasing an action that is not held still counts as a fresh release in
+## Godot, which would hide the real one from "just released" checks.
+func _release(action: String) -> void:
+	if Input.is_action_pressed(action):
+		Input.action_release(action)
+
+
+func _report(line: String) -> void:
+	print("[autotest] " + line)
+	if out_dir != "":
+		var path := out_dir + "/results.txt"
+		var file := FileAccess.open(path, FileAccess.READ_WRITE if FileAccess.file_exists(path) else FileAccess.WRITE)
+		file.seek_end()
+		file.store_line(line)
+		file.close()
+
+
+func _release_all_but_jump() -> void:
+	for action: String in ["move_right", "move_left", "stay", "fetch", "feed", "throw", "call_dog"]:
+		_release(action)
+
+
+func _advance() -> void:
+	_step += 1
+	_step_t = 0.0
+	_has_eaten = false
+	_pips_at_step = -1
+
+
+func _do_step(step: Array, level: Level) -> void:
+	var op: String = step[0]
+	var p := _player.global_position
+	var bramble := get_tree().get_first_node_in_group("enemies") as Enemy
+	match op:
+		"right", "rightj", "left", "leftj":
+			var dir := -1.0 if op.begins_with("left") else 1.0
+			Input.action_press("move_right" if dir > 0.0 else "move_left")
+			if op.ends_with("j") and _player.is_on_floor() and _jump_hold <= 0.0:
+				var gap := not _ray(p + Vector2(dir * 24.0, -4.0), p + Vector2(dir * 24.0, 40.0))
+				var wall := _ray(p + Vector2(0.0, -8.0), p + Vector2(dir * 30.0, -8.0)) \
+						or _ray(p + Vector2(0.0, -40.0), p + Vector2(dir * 30.0, -40.0))
+				if gap or wall:
+					Input.action_press("jump")
+					_jump_hold = 0.5
+			if (p.x - float(step[1])) * dir >= 0.0:
+				_advance()
+		"press":
+			Input.action_press(step[1])
+			_advance()
+		"wait":
+			if _step_t > float(step[1]):
+				_advance()
+		"until":
+			var done := false
+			match step[1]:
+				"dog_near":
+					done = absf(_dog.global_position.x - p.x) < 100.0 and absf(_dog.global_position.y - p.y) < 6.0 \
+							and _dog.is_on_floor() and _step_t > 0.5
+				"dog_seated":
+					done = _dog.staying and _dog.act == Dog.Act.SIT
+				"plateA":
+					done = _dog.staying and _dog.act == Dog.Act.SIT and _pressed("A")
+				"plateB":
+					done = _pressed("B")
+				"has_key":
+					for node in get_tree().get_nodes_in_group("items"):
+						if (node as Item).carried_by == _player:
+							done = true
+				"dog_ate":
+					var flying := false
+					for node in level.get_children():
+						if node is ThrownBait:
+							flying = true
+					var ate := _eaten_since_start(level)
+					_has_eaten = _has_eaten or ate
+					done = not flying and _dog.act != Dog.Act.EAT and _step_t > 1.2 and _has_eaten
+				"dog_chased":
+					done = get_tree().get_nodes_in_group("squirrels").is_empty() and _dog.act != Dog.Act.CHASE and _step_t > 1.0
+				"hunting":
+					done = bramble != null and (bramble.is_hunting() or bramble.is_distracted())
+				"held":
+					done = bramble != null and bramble.is_distracted() and absf(bramble.velocity.x) < 2.0 and _step_t > 1.0
+			if done:
+				_advance()
+
+
+## True once the dog has eaten something since this step began: its hunger
+## dropped, which only eating does.
+var _pips_at_step := -1
+var _has_eaten := false
+func _eaten_since_start(_level_now: Level) -> bool:
+	if _pips_at_step < 0:
+		_pips_at_step = _dog.pips
+		return false
+	if _dog.pips > _pips_at_step:
+		_pips_at_step = _dog.pips
+	return _dog.pips < _pips_at_step
+
+
+func _pressed(channel: String) -> bool:
+	for node in get_tree().get_nodes_in_group("plates"):
+		var plate := node as Plate
+		if plate.channel == channel and plate.pressed:
+			return true
+	return false
+
+
+## A quick run through the scenery levels, to catch errors.
+func _run_scenery(delta: float) -> void:
+	var level := _level()
+	if level == null or level.puzzle or main.get("_switching"):
+		return
+	_scenery_t += delta
 	Input.action_press("move_right")
-	if not _player.is_on_floor() or _jump_hold > 0.0:
-		return
-
-	var pos := _player.global_position
-	var wall := _ray(pos + Vector2(0.0, -8.0), pos + Vector2(30.0, -8.0))
-	var gap := not _ray(pos + Vector2(24.0, -4.0), pos + Vector2(24.0, 40.0))
-	if wall:
-		_jump(0.5)
-	elif gap:
-		# Measure the gap, and only tap jump for a short one.
-		var width := 0.0
-		while width < 260.0 and not _ray(pos + Vector2(24.0 + width, -60.0), pos + Vector2(24.0 + width, 80.0)):
-			width += 8.0
-		if width >= 260.0:
-			return  # a drop: just run off it
-		_jump(0.04 if width <= 72.0 else 0.5)
-
-
-func _jump(hold: float) -> void:
-	Input.action_press("jump")
-	_jump_hold = hold
+	var p := _player.global_position
+	if _player.is_on_floor() and _jump_hold <= 0.0:
+		if _ray(p + Vector2(0.0, -8.0), p + Vector2(30.0, -8.0)) or not _ray(p + Vector2(24.0, -4.0), p + Vector2(24.0, 40.0)):
+			Input.action_press("jump")
+			_jump_hold = 0.5
+	if _jump_hold > 0.0:
+		_jump_hold -= delta
+		if _jump_hold <= 0.0:
+			Input.action_release("jump")
+	if _scenery_t > SCENERY_SECONDS:
+		_scenery_t = 0.0
+		_scenery += 1
+		if _scenery >= LevelMaps.LEVELS.size() + PuzzleCases.CASES.size() - _first_scenery():
+			_report("DONE  %d passed, %d failed" % [_passed, _failed])
+			_release_all()
+			get_tree().quit()
+		else:
+			main.call("go_to_level", int(main.get("level_index")) + 1)
 
 
 func _ray(from: Vector2, to: Vector2) -> bool:
@@ -148,106 +315,6 @@ func _ray(from: Vector2, to: Vector2) -> bool:
 func _screenshot() -> void:
 	await RenderingServer.frame_post_draw
 	var image := get_viewport().get_texture().get_image()
-	image.save_png("%s/shot_%d_%02d.png" % [out_dir, _level_seen, _shots])
+	var tag := "case%02d" % _case if _case < PuzzleCases.CASES.size() else "scenery"
+	image.save_png("%s/%s_%03d.png" % [out_dir, tag, _shots])
 	_shots += 1
-
-
-func _next_phase(note: String) -> void:
-	_phase += 1
-	_phase_t = 0.0
-	print("[autotest] SOLVE %s: %s (level t=%.1f)" % [_solving, note, _level_t])
-
-
-## Scripted solutions for the rewind levels, to prove they can be finished.
-func _solve(delta: float, level: Level) -> void:
-	if _solving != level.title:
-		_solving = level.title
-		_phase = 0
-		_phase_t = 0.0
-	_phase_t += delta
-	for action: String in ["move_right", "move_left", "stay", "attack"]:
-		Input.action_release(action)
-	if _jump_hold > 0.0:
-		_jump_hold -= delta
-		if _jump_hold <= 0.0:
-			Input.action_release("jump")
-	var p := _player.global_position
-	var floor_ahead := _ray(p + Vector2(24.0, -4.0), p + Vector2(24.0, 40.0))
-	var jump_gaps := _player.is_on_floor() and not floor_ahead and _jump_hold <= 0.0
-
-	var plate := get_tree().get_first_node_in_group("plates") as Plate
-	for action: String in ["fetch", "feed"]:
-		Input.action_release(action)
-	match level.title:
-		"Sit. Stay.", "Temptation":
-			match _phase:
-				0:
-					# Collect the treat on the way, stop just past the plate.
-					if level.title == "Temptation" and _player.treats > 0:
-						# Feed the hungry dog before going anywhere near the sandwich.
-						if absf(_dog.global_position.x - p.x) < 75.0 and fmod(_phase_t, 0.4) < 0.05:
-							Input.action_press("feed")
-					elif p.x < plate.global_position.x + 30.0:
-						Input.action_press("move_right")
-					elif absf(_dog.global_position.x - p.x) < 100.0 and _phase_t > 1.2:
-						_next_phase("at the plate, hunger %d%%" % roundi(_dog.hunger * 100.0))
-				1:
-					if _phase_t > 0.5:
-						Input.action_press("stay")
-						_next_phase("told the dog to stay")
-				2:
-					if _dog.staying and plate.pressed and _phase_t > 1.0:
-						_next_phase("dog is holding the plate")
-					elif _phase_t > 6.0:
-						_next_phase("FAILED: plate not held, dog act %s" % Dog.Act.keys()[_dog.act])
-				3:
-					Input.action_press("move_right")
-					if jump_gaps:
-						_jump(0.5)
-		"Fetch":
-			match _phase:
-				0:
-					if p.x < 660.0:
-						Input.action_press("move_right")
-					elif _phase_t > 1.5:
-						Input.action_press("fetch")
-						_next_phase("sent the dog to fetch")
-				1:
-					for node in get_tree().get_nodes_in_group("items"):
-						if (node as Item).carried_by == _player:
-							_next_phase("dog brought the key")
-					if _phase_t > 8.0:
-						_next_phase("FAILED: no key, dog act %s" % Dog.Act.keys()[_dog.act])
-				2:
-					Input.action_press("move_left")
-		"Hold its eye":
-			var bramble := get_tree().get_first_node_in_group("enemies") as Enemy
-			match _phase:
-				0:
-					if p.x < 560.0:
-						Input.action_press("move_right")
-					elif absf(_dog.global_position.x - p.x) < 90.0 and _phase_t > 1.0:
-						Input.action_press("stay")
-						_next_phase("told the dog to stay")
-				1:
-					Input.action_press("move_right")
-					if bramble.is_hunting() or p.x > 860.0:
-						_next_phase("bramble has seen us")
-				2:
-					if p.x > _dog.global_position.x - 50.0:
-						Input.action_press("move_left")
-					if bramble.is_distracted():
-						_next_phase("bramble is staring at the dog")
-				3:
-					var gap := bramble.global_position.x - p.x
-					if bramble.is_dead():
-						_next_phase("bramble beaten")
-					elif gap > 34.0:
-						Input.action_press("move_right")
-					else:
-						_swing -= delta
-						if _swing <= 0.0:
-							_swing = 0.36
-							Input.action_press("attack")
-				4:
-					Input.action_press("move_right")

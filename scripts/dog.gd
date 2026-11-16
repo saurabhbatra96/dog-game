@@ -13,7 +13,16 @@ signal landed(impact: float)
 signal perked
 
 enum Mood { CALM, CURIOUS, EXCITED, WARY }
-enum Act { STAND, FOLLOW, LEAD, SIT, LIE, WANDER, SNIFF, INVESTIGATE, COWER, COME, WAIT, LEAP, RESCUE, DISTRACT, PETTED, DRAG, FETCH, EAT }
+enum Act { STAND, FOLLOW, LEAD, SIT, LIE, WANDER, SNIFF, INVESTIGATE, COWER, COME, WAIT, LEAP, RESCUE, DISTRACT, PETTED, DRAG, FETCH, EAT, CHASE }
+## How long a stay holds at each skill level, in seconds.
+const STAY_SECONDS: Array[float] = [3.0, 8.0, INF]
+## How far away a plate or mat can be for the dog to settle on it, per level.
+const STAY_SEEK: Array[float] = [110.0, 220.0, 360.0]
+## How far away a key can be, measured from the dog, per fetch level.
+const FETCH_REACH: Array[float] = [320.0, 640.0, 1200.0]
+const MAX_PIPS := 5
+## A bramble this close to a sitting dog is drawn to it.
+const BRAMBLE_PULL := 240.0
 ## The ways it can react to being petted.
 enum { PET_LEAN, PET_ROLL, PET_SPIN, PET_LICK }
 
@@ -86,22 +95,34 @@ var kill_y := 1.0e9
 var rescue_count := 0
 ## True while it waits at a ledge for the player to land, ready to jump after them.
 var braced := false
-## 0 is full, 1 is starving. Every command costs a little; treats and
-## anything edible it finds bring it back down.
-var hunger := 0.2
-## Practice points per trick. A treat given just after a trick adds one.
-var skill_xp := {"stay": 0, "fetch": 0}
+## Hunger, from 0 (full) to MAX_PIPS (too hungry to take orders). Stay and
+## fetch each cost one pip; eating takes three off.
+var pips := 1
+## Level of each trick, 1 to 3. A biscuit given just after a trick raises it.
+var skills := {"stay": 1, "fetch": 1}
+## Whether orders make it hungry. On in puzzle rooms only.
+var hunger_enabled := false
+## Whether it wanders off to sniff about when left idle.
+var wander_enabled := true
 
 var _last_skill := ""
 var _last_skill_age := 99.0
 var _fetching: Item = null
 var _fetch_home := false
 var _lure: Lure = null
+var _chasing: Squirrel = null
+var _chase_x := 0.0
+var _chase_over := false
+## Seconds of the current stay left, and how long it started with.
+var stay_left := 0.0
+var stay_total := 0.0
 var _eat_time := 0.0
 ## True while it has been told to stay put. Calling it releases it.
 var staying := false
 ## Whether it may bound straight to the player when it cannot find a way.
 var rescue_enabled := true
+## Whether it may run off to distract a bramble on its own initiative.
+var auto_distract := true
 var _stay_x := 0.0
 ## Counts down while a bark is showing.
 var bark_time := 0.0
@@ -190,6 +211,7 @@ func reset(to: Vector2) -> void:
 	staying = false
 	_fetching = null
 	_lure = null
+	_chasing = null
 	_enemy = null
 	_barked = false
 	_distract_cd = randf_range(2.0, 4.0)
@@ -262,68 +284,92 @@ func start_drag(goal_x: float) -> void:
 	perked.emit()
 
 
-## Tell the dog to stay where it is, or release it. Told to stay near a
-## pressure plate, it settles on the plate.
+## Tell the dog to stay, or release it. Told to stay near a plate or a mat,
+## it settles there. Each stay costs a pip of hunger.
 func toggle_stay() -> void:
 	if staying:
 		staying = false
 		say("!", 0.6)
 		perked.emit()
 		return
-	if act == Act.RESCUE or act == Act.LEAP or _dragging or not is_on_floor():
+	if act == Act.RESCUE or act == Act.LEAP or _dragging or not is_on_floor() or _lure != null or _chasing != null:
 		return
+	if _refuses():
+		return
+	if _fetching != null:
+		_fetching.carried_by = null
+		_fetching = null
 	staying = true
+	_chase_over = false
 	_used_skill("stay")
-	var seek: float = [110.0, 220.0, 360.0][skill_level("stay") - 1]
+	var level := skill_level("stay")
+	var seek := STAY_SEEK[level - 1]
+	stay_total = STAY_SECONDS[level - 1]
+	stay_left = stay_total
 	_stay_x = global_position.x
-	for node in get_tree().get_nodes_in_group("plates"):
-		var plate := node as Plate
-		var d := plate.global_position - global_position
-		if absf(d.x) < seek and absf(d.y) < 10.0 and _walkable(global_position, plate.global_position):
-			_stay_x = plate.global_position.x
+	# Settle on the nearest seat within range that it can walk to.
+	for node in get_tree().get_nodes_in_group("seats"):
+		var seat := node as Node2D
+		if seat is Plate and (seat as Plate).heavy:
+			continue
+		var d := seat.global_position - global_position
+		if absf(d.x) < seek and absf(d.y) < 10.0 and _walkable(global_position, seat.global_position):
+			_stay_x = seat.global_position.x
+			seek = absf(d.x)
 	_enemy = null
 	_drop_poi(3.0)
+	_set_act(Act.FOLLOW)
+	_act_time = 0.0
 	say("...", 0.9)
 
 
-## 1 to 3. Two practice points per level.
 func skill_level(skill: String) -> int:
-	return clampi(1 + int(skill_xp.get(skill, 0)) / 2, 1, 3)
+	return clampi(int(skills.get(skill, 1)), 1, 3)
 
 
-## How much of a smell's reach still gets through. A dog told to stay resists
-## better the more practised its stay is.
+## How much of a smell's reach still gets through: a dog under orders
+## resists twice as well as a dog at a loose end.
 func lure_resistance() -> float:
-	if not staying:
-		return 1.0
-	return [1.0, 0.65, 0.35][skill_level("stay") - 1]
+	return 0.5 if staying else 1.0
+
+
+## Too hungry to listen?
+func _refuses() -> bool:
+	if hunger_enabled and pips >= MAX_PIPS:
+		say("...", 1.2)
+		bark_time = 0.3
+		return true
+	return false
 
 
 func _used_skill(skill: String) -> void:
 	_last_skill = skill
 	_last_skill_age = 0.0
-	hunger = minf(hunger + 0.07, 1.0)
+	if hunger_enabled:
+		pips = mini(pips + 1, MAX_PIPS)
 
 
-## Give the dog a treat. It eases hunger, and if it comes within a few seconds
-## of a trick, it also reinforces that trick.
+## Give the dog a biscuit. Within a few seconds of a trick, it teaches that
+## trick: one biscuit, one level.
 func feed() -> void:
-	hunger = maxf(hunger - 0.35, 0.0)
-	if _last_skill != "" and _last_skill_age < 5.0:
-		var before := skill_level(_last_skill)
-		skill_xp[_last_skill] += 1
-		say("!" if skill_level(_last_skill) > before else "heart", 1.4)
+	if _last_skill != "" and _last_skill_age < 5.0 and skill_level(_last_skill) < 3:
+		skills[_last_skill] = skill_level(_last_skill) + 1
+		if _last_skill == "stay" and staying:
+			stay_total = STAY_SECONDS[skill_level("stay") - 1]
+			stay_left = stay_total
 		_last_skill = ""
+		say("!", 1.4)
 	else:
 		say("heart", 1.2)
 	hopped.emit()
 
 
-## Send the dog for the nearest key it can walk to. Better fetch reaches further.
+## Send the dog for the nearest key it can walk to. The range is measured
+## from the dog, not from the player. Each fetch costs a pip of hunger.
 func fetch() -> void:
-	if act == Act.RESCUE or act == Act.LEAP or _dragging or _lure != null or not is_on_floor():
+	if act == Act.RESCUE or act == Act.LEAP or _dragging or _lure != null or _chasing != null or not is_on_floor():
 		return
-	var reach: float = [460.0, 620.0, 800.0][skill_level("fetch") - 1]
+	var reach := FETCH_REACH[skill_level("fetch") - 1]
 	var best: Item = null
 	for node in get_tree().get_nodes_in_group("items"):
 		var item := node as Item
@@ -335,7 +381,11 @@ func fetch() -> void:
 	if best == null:
 		say("?", 0.9)
 		return
+	if _refuses():
+		return
 	staying = false
+	_chase_over = false
+	_used_skill("fetch")
 	_fetching = best
 	_fetch_home = false
 	_drop_poi(4.0)
@@ -387,6 +437,7 @@ func _physics_process(delta: float) -> void:
 	if _scan_timer <= 0.0:
 		_scan_timer = 0.2
 		_scan_pois()
+	_check_food()
 	_update_mood(delta)
 
 	if act == Act.RESCUE:
@@ -420,7 +471,8 @@ func _track_player(delta: float) -> void:
 		if not _player_on_floor and _pending != null:
 			_pending.to = player.global_position
 			# A hop that lands on the same stretch of floor is not worth replaying.
-			if not _walkable(_pending.from, _pending.to):
+			if not _walkable(_pending.from, _pending.to) \
+					and (not _links.is_empty() or act == Act.LEAP or _walkable(global_position, _pending.from)):
 				_links.append(_pending)
 			_pending = null
 			_direct_timer = 0.0
@@ -434,7 +486,8 @@ func _track_player(delta: float) -> void:
 			_pending.apex = minf(_pending.apex, player.global_position.y)
 	_player_on_floor = on_floor
 
-	if staying:
+	# While it has something of its own to do, it is not following anyone.
+	if staying or _lure != null or _chasing != null or _fetching != null or _chase_over:
 		_links.clear()
 		_pending = null
 
@@ -473,7 +526,7 @@ func _track_player(delta: float) -> void:
 ## True if a ground-bound dog could walk from a to b: same height, floor all
 ## the way, no wall in between. Both points are feet positions.
 func _walkable(a: Vector2, b: Vector2) -> bool:
-	if absf(a.y - b.y) > 6.0 or absf(a.x - b.x) > 900.0:
+	if absf(a.y - b.y) > 6.0 or absf(a.x - b.x) > 2400.0:
 		return false
 	var space := get_world_2d().direct_space_state
 	var wall := PhysicsRayQueryParameters2D.create(a + Vector2(0.0, -10.0), b + Vector2(0.0, -10.0), WORLD_MASK)
@@ -519,28 +572,29 @@ func _scan_pois() -> void:
 		elif not poi.seen and d < best_dist:
 			best = poi
 			best_dist = d
-	# A smell within reach beats any order.
-	if _lure == null and is_on_floor() and act != Act.LEAP and act != Act.RESCUE:
-		for node in get_tree().get_nodes_in_group("lures"):
-			var lure := node as Lure
-			var d := lure.global_position - global_position
-			if absf(d.x) < Lure.reach(hunger) * lure_resistance() and absf(d.y) < 130.0:
-				_lure = lure
+	# A bolting squirrel beats any order short of a perfect stay.
+	if _chasing == null and is_on_floor() and act != Act.LEAP and act != Act.RESCUE \
+			and not (staying and skill_level("stay") >= 3):
+		for node in get_tree().get_nodes_in_group("squirrels"):
+			var squirrel := node as Squirrel
+			if squirrel.running and not squirrel.gone and squirrel.global_position.distance_to(global_position) < 420.0:
+				_chasing = squirrel
+				_chase_x = squirrel.global_position.x
+				_chase_over = false
 				staying = false
 				_enemy = null
 				if _fetching != null:
 					_fetching.carried_by = null
 					_fetching = null
-				_set_act(Act.EAT)
-				_act_time = 0.0
+				_set_act(Act.CHASE)
 				say("!", 0.6)
 				break
-	var busy := act == Act.LEAP or act == Act.RESCUE or not _links.is_empty() or _called > 0.0 or _lure != null or _fetching != null \
+	var busy := act == Act.LEAP or act == Act.RESCUE or not _links.is_empty() or _called > 0.0 or _lure != null or _fetching != null or _chasing != null \
 			or _enemy != null or _dragging or act == Act.PETTED or staying
 
 	# Pick a fight to meddle in. The timing is the dog's own: a random wait
 	# after each attempt, which the player cannot hurry.
-	if _distract_cd <= 0.0 and not busy and is_on_floor():
+	if auto_distract and _distract_cd <= 0.0 and not busy and is_on_floor():
 		var nearest := 300.0
 		for node in get_tree().get_nodes_in_group("enemies"):
 			var enemy := node as Enemy
@@ -563,6 +617,44 @@ func _scan_pois() -> void:
 		_act_time = 0.0
 		say("?", 1.0)
 		perked.emit()
+
+
+## A smell within reach beats any order.
+func _check_food() -> void:
+	if _lure != null or not is_on_floor() or act == Act.LEAP or act == Act.RESCUE:
+		return
+	for node in get_tree().get_nodes_in_group("lures"):
+		var lure := node as Lure
+		if absf(lure.global_position.x - global_position.x) < lure.reach_for(self) and _can_reach_food(lure):
+			_lure = lure
+			staying = false
+			_enemy = null
+			_chase_over = false
+			if _fetching != null:
+				_fetching.carried_by = null
+				_fetching = null
+			_set_act(Act.EAT)
+			_act_time = 0.0
+			say("!", 0.6)
+			return
+
+
+## Food counts only if the dog could get to it: nothing solid between them
+## at its own height, and if the food is lower, a clear drop down to it.
+func _can_reach_food(lure: Lure) -> bool:
+	var here := global_position
+	var there := lure.global_position
+	if there.y < here.y - 12.0:
+		return false
+	var space := get_world_2d().direct_space_state
+	var across := PhysicsRayQueryParameters2D.create(here + Vector2(0.0, -8.0), Vector2(there.x, here.y - 8.0), WORLD_MASK)
+	if not space.intersect_ray(across).is_empty():
+		return false
+	if there.y > here.y + 12.0:
+		var down := PhysicsRayQueryParameters2D.create(Vector2(there.x, here.y - 8.0), there + Vector2(0.0, -8.0), WORLD_MASK)
+		if not space.intersect_ray(down).is_empty():
+			return false
+	return true
 
 
 func _drop_poi(cooldown: float) -> void:
@@ -708,6 +800,17 @@ func _free_step(delta: float) -> void:
 	if not is_on_floor():
 		velocity.x = move_toward(velocity.x, 0.0, 300.0 * delta)
 		return
+	if _chasing != null:
+		_chase_step(delta)
+		return
+	if _chase_over and not staying and _called <= 0.0:
+		# Still staring up the tree until told otherwise.
+		_set_act(Act.WAIT)
+		_brake(delta)
+		if _act_time > 5.0:
+			_chase_over = false
+		return
+	_chase_over = false
 	if _lure != null:
 		_eat_step(delta)
 		return
@@ -729,6 +832,8 @@ func _free_step(delta: float) -> void:
 		# Cannot walk to the player and has no jumps to replay: it is lost.
 		_set_act(Act.WAIT)
 		_brake(delta)
+		if _called > 0.0 and _called < 2.2 and emote == "":
+			say("?", 0.9)  # called, but there is no way to come
 		if player.is_on_floor():
 			_wait_time += delta
 		return
@@ -821,6 +926,8 @@ func _sit() -> void:
 
 
 func _pick_wander() -> bool:
+	if not wander_enabled:
+		return false
 	var side := 1.0 if randf() < 0.5 else -1.0
 	for i in 2:
 		var x := player.global_position.x + side * randf_range(50.0, wander_radius)
@@ -844,6 +951,22 @@ func _come_step(delta: float, dist: float) -> void:
 		_set_act(Act.STAND)
 
 
+## After the squirrel, until it gets away.
+func _chase_step(delta: float) -> void:
+	_set_act(Act.CHASE)
+	if is_instance_valid(_chasing) and not _chasing.gone:
+		_chase_x = _chasing.global_position.x
+	# Keep going to where it was last seen, then bark up at nothing.
+	var clear := _drive(_chase_x, max_speed * 1.05, delta, 14.0, 10.0)
+	var lost := not is_instance_valid(_chasing) or _chasing.gone
+	if lost and (absf(_chase_x - global_position.x) < 24.0 or not clear or is_on_wall() or _act_time > 6.0):
+		_chasing = null
+		_chase_over = true
+		bark_time = 0.3
+		say("?", 1.0)
+		_set_act(Act.STAND)
+
+
 ## Something smells too good. Everything else is forgotten until it is eaten.
 func _eat_step(delta: float) -> void:
 	if not is_instance_valid(_lure):
@@ -864,7 +987,7 @@ func _eat_step(delta: float) -> void:
 	if _eat_time > 1.6:
 		_lure.queue_free()
 		_lure = null
-		hunger = maxf(hunger - 0.45, 0.0)
+		pips = maxi(pips - 3, 0)
 		say("heart", 1.2)
 		_set_act(Act.STAND)
 
@@ -890,30 +1013,41 @@ func _fetch_step(delta: float) -> void:
 		if absf(px - global_position.x) < 30.0 and absf(player.global_position.y - global_position.y) < 30.0:
 			_fetching.carried_by = player
 			_fetching = null
-			_used_skill("fetch")
+			_last_skill = "fetch"
+			_last_skill_age = 0.0
 			say("heart", 1.0)
 			_set_act(Act.STAND)
 
 
-## Sit tight. Any bramble that comes close cannot take its eyes off the dog.
+## Go to the seat and sit. Once it is sitting, any bramble nearby is drawn
+## to it and cannot look away.
 func _stay_step(delta: float) -> void:
 	if absf(_stay_x - global_position.x) > 3.0:
 		_set_act(Act.FOLLOW)
-		_drive(_stay_x, max_speed * 0.6, delta, 1.0, 9.0)
+		var clear := _drive(_stay_x, max_speed * 0.6, delta, 1.0, 9.0)
+		# Cannot get there after all: sit where it is.
+		if not clear or is_on_wall() or _act_time > 4.0:
+			_stay_x = global_position.x
 		return
 	_set_act(Act.SIT)
 	_act_len = 999.0
 	_brake(delta)
-	var holding := false
+	# A stay only lasts as long as it has been practised.
+	stay_left -= delta
+	if stay_left <= 0.0:
+		staying = false
+		say("?", 0.8)
+		return
+	var close := false
 	for node in get_tree().get_nodes_in_group("enemies"):
 		var enemy := node as Enemy
 		var d := enemy.global_position - global_position
-		if not enemy.is_dead() and absf(d.x) < 110.0 and absf(d.y) < 40.0:
+		if not enemy.is_dead() and absf(d.x) < BRAMBLE_PULL and absf(d.y) < 40.0:
 			enemy.distract(self, 0.4)
-			holding = true
+			close = close or absf(d.x) < 110.0
 	_bark_timer -= delta
-	if holding and _bark_timer <= 0.0:
-		_bark_timer = 0.6
+	if close and _bark_timer <= 0.0:
+		_bark_timer = 0.9
 		bark_time = 0.3
 
 

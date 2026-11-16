@@ -4,6 +4,8 @@ extends Node2D
 ## will catch the smell and abandon whatever it was told to do. The ring shows
 ## how far the pull reaches right now, so you can plan around it.
 
+## Thrown food is fresh and irresistible: its pull is wide and ignores hunger.
+var strong := false
 var _t := 0.0
 
 
@@ -11,9 +13,15 @@ func _ready() -> void:
 	add_to_group("lures")
 
 
-## How far the smell reaches for a dog this hungry (0 to 1).
-static func reach(hunger: float) -> float:
-	return 30.0 + 200.0 * hunger
+## How far the smell reaches for a dog with this many pips of hunger: one
+## tile, plus a tile and a half per pip.
+static func reach(pips: int) -> float:
+	return 32.0 + 48.0 * pips
+
+
+## How far this food pulls the given dog right now.
+func reach_for(dog: Dog) -> float:
+	return 400.0 if strong else Lure.reach(dog.pips) * dog.lure_resistance()
 
 
 func _process(delta: float) -> void:
@@ -24,7 +32,7 @@ func _process(delta: float) -> void:
 func _draw() -> void:
 	var dog := get_tree().get_first_node_in_group("dog") as Dog
 	if dog != null:
-		var r := Lure.reach(dog.hunger) * dog.lure_resistance()
+		var r := reach_for(dog)
 		draw_arc(Vector2(0.0, -6.0), r, 0.0, TAU, 72, Color(1.0, 0.75, 0.4, 0.16 + 0.06 * sin(_t * 2.0)), 2.0, true)
 	# A sandwich.
 	draw_rect(Rect2(-8.0, -9.0, 16.0, 3.0), Color("e9cf9a"))

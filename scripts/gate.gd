@@ -9,6 +9,8 @@ const SIZE := Vector2(20.0, 96.0)
 ## A locked door ignores plates. It opens for good when the player brings a key.
 var needs_key := false
 var _unlocked := false
+## Which plates open this gate.
+var channel := "A"
 var _lift := 0.0
 var _collider: CollisionShape2D
 
@@ -34,16 +36,17 @@ func _physics_process(delta: float) -> void:
 				item.queue_free()
 	elif not needs_key:
 		for node in get_tree().get_nodes_in_group("plates"):
-			if (node as Plate).pressed:
+			if (node as Plate).pressed and (node as Plate).channel == channel:
 				open = true
-	_lift = move_toward(_lift, 1.0 if open else 0.0, delta * 3.5)
+	# Up quickly, down faster: nobody slips through behind whoever held it.
+	_lift = move_toward(_lift, 1.0 if open else 0.0, delta * (6.0 if open else 9.0))
 	_collider.disabled = _lift > 0.35
 	queue_redraw()
 
 
 func _draw() -> void:
 	var raise := _lift * (SIZE.y - 14.0)
-	var iron := Color("8a6a2c") if needs_key else Color("3a3a42")
+	var iron := Color("8a6a2c") if needs_key else (Plate.COLORS[channel] as Color).darkened(0.45)
 	if needs_key and not _unlocked:
 		draw_circle(Vector2(0.0, -SIZE.y * 0.5), 7.0, Color("e9b93a"))
 		draw_rect(Rect2(-1.5, -SIZE.y * 0.5 - 1.0, 3.0, 7.0), Color("1d1a22"))

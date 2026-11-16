@@ -2,10 +2,10 @@ extends OutlinedArt
 ## Placeholder art for the player, drawn from shapes and animated in code:
 ## dark hair, beard, glasses, white tank top, navy shorts, and a red tie.
 ## A little expression goes a long way at this size: brows and mouth change
-## when he is hurt, towed, swinging, or fussing over the dog.
+## when he is hurt, towed, or fussing over the dog.
 ## Swap this node for a sprite or skeleton once real art exists.
 
-enum Mood { NEUTRAL, HAPPY, HURT, SURPRISED, FIERCE }
+enum Mood { NEUTRAL, HAPPY, HURT, SURPRISED }
 
 const C_SKIN := Color("c48d66")
 const C_SKIN_FAR := Color("a9744f")
@@ -53,8 +53,6 @@ func mood() -> Mood:
 		return Mood.HURT
 	if player.dragged:
 		return Mood.SURPRISED
-	if player.attack_time > 0.0:
-		return Mood.FIERCE
 	if _joy > 0.0:
 		return Mood.HAPPY
 	return Mood.NEUTRAL
@@ -90,8 +88,6 @@ func _draw() -> void:
 	var lean := clampf(player.velocity.x * f * 0.0004, -0.12, 0.12)
 	if player.dragged:
 		lean += 0.22
-	if player.dashing > 0.0:
-		lean += 0.3
 	var xf := Transform2D.IDENTITY.scaled(Vector2(f * sx, sy)) * Transform2D(lean, Vector2.ZERO)
 	draw_set_transform_matrix(xf)
 	var bob := sin(_phase * 2.0) * 1.2 * run + _kneel * 7.0
@@ -101,11 +97,6 @@ func _draw() -> void:
 		_figure(on_floor, run, bob, air, xf)
 	outline = false
 
-	if player.dashing > 0.0:
-		for k in 3:
-			draw_rect(Rect2(-18.0 - k * 9.0, -34.0 + k * 9.0, 12.0, 2.7), Color(1.0, 1.0, 1.0, 0.7 - k * 0.2))
-	if player.attack_time > 0.0:
-		_swing(player.attack_time / 0.16, player.attack_dir.y * PI * 0.5)
 	draw_set_transform_matrix(Transform2D.IDENTITY)
 
 
@@ -182,19 +173,12 @@ func _figure(on_floor: bool, run: float, bob: float, air: float, xf: Transform2D
 		Mood.SURPRISED:
 			draw_rect(Rect2(brow + Vector2(0.0, -1.8), Vector2(5.6, 1.4)), C_HAIR)
 			draw_rect(Rect2(lips + Vector2(0.8, -0.4), Vector2(2.4, 2.6)), C_MOUTH)
-		Mood.FIERCE:
-			draw_line(brow + Vector2(0.0, -1.4), brow + Vector2(5.8, 1.6), C_HAIR, 1.6, Shapes.AA)
-			draw_rect(Rect2(lips, Vector2(3.8, 1.4)), C_TEETH)
 
 
 func _arm(on_floor: bool, run: float, bob: float, air: float, near: bool, xf: Transform2D) -> void:
 	var shoulder := Vector2(-0.5 if near else 1.5, -30.5 + bob)
 	var hand: Vector2
-	if near and player.attack_time > 0.0:
-		# Thrown forward through the swing.
-		var through := 1.0 - player.attack_time / 0.16
-		hand = shoulder + Vector2(9.0, -7.0).lerp(Vector2(11.0, 6.0), through)
-	elif near and _kneel > 0.2 and is_instance_valid(player.tie_holder):
+	if near and _kneel > 0.2 and is_instance_valid(player.tie_holder):
 		# Reaching out to ruffle the dog, wherever it is.
 		var reach := _to_figure(xf, player.tie_holder.global_position + Vector2(0.0, -15.0)) - shoulder
 		hand = shoulder + reach.limit_length(13.0) + Vector2(sin(_t * 14.0) * 1.6, 0.0)
@@ -209,18 +193,3 @@ func _arm(on_floor: bool, run: float, bob: float, air: float, near: bool, xf: Tr
 	var color := C_SKIN if near else C_SKIN_FAR
 	limb(shoulder, hand, 4.0, color)
 	blob(hand, 2.1, color)
-
-
-## A crescent of motion in front of the swing.
-func _swing(life: float, turn: float) -> void:
-	var center := Vector2(2.0, -25.0) + Vector2(cos(turn), sin(turn)) * 2.0
-	var outer := PackedVector2Array()
-	var inner := PackedVector2Array()
-	for k in 9:
-		var angle := turn - 1.25 + 2.5 * k / 8.0 + (1.0 - life) * 0.5
-		var dir := Vector2(cos(angle), sin(angle))
-		var thick := 0.15 + 0.85 * sin(PI * k / 8.0)
-		outer.append(center + dir * 30.0)
-		inner.append(center + dir * (30.0 - 9.0 * thick))
-	inner.reverse()
-	draw_colored_polygon(outer + inner, Color(1.0, 1.0, 1.0, 0.85 * life))
